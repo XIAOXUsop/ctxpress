@@ -38,7 +38,6 @@ public final class PressPolicy {
     private final int headLines;
     private final int tailLines;
     private final int maxArrayItems;
-    private final int maxLogSamples;
     private final double maxProtectedRatio;
 
     private PressPolicy(Builder builder) {
@@ -47,7 +46,6 @@ public final class PressPolicy {
         this.headLines = builder.headLines;
         this.tailLines = builder.tailLines;
         this.maxArrayItems = builder.maxArrayItems;
-        this.maxLogSamples = builder.maxLogSamples;
         this.maxProtectedRatio = builder.maxProtectedRatio;
     }
 
@@ -76,10 +74,6 @@ public final class PressPolicy {
         return maxArrayItems;
     }
 
-    public int maxLogSamples() {
-        return maxLogSamples;
-    }
-
     /** 该行是否命中普通保护规则（命中即不参与裁剪） */
     public boolean isProtected(String line) {
         return isProtected(line, false);
@@ -104,11 +98,6 @@ public final class PressPolicy {
         return false;
     }
 
-    /** 该行是否是高优先级故障线索 */
-    public boolean isCritical(String line) {
-        return line != null && CRITICAL.matcher(line).find();
-    }
-
     public static Builder builder() {
         return new Builder();
     }
@@ -124,7 +113,6 @@ public final class PressPolicy {
         private int headLines = 40;
         private int tailLines = 20;
         private int maxArrayItems = 8;
-        private int maxLogSamples = 30;
         private double maxProtectedRatio = 0.6;
 
         /**
@@ -176,11 +164,6 @@ public final class PressPolicy {
 
         public Builder maxArrayItems(int maxArrayItems) {
             this.maxArrayItems = Math.max(1, maxArrayItems);
-            return this;
-        }
-
-        public Builder maxLogSamples(int maxLogSamples) {
-            this.maxLogSamples = Math.max(1, maxLogSamples);
             return this;
         }
 

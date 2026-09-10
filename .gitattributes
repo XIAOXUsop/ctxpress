@@ -1,0 +1,15 @@
+# 换行符统一为 LF。
+#
+# 这个项目对换行符格外敏感：早先出过一次真实缺陷——Windows 采集的日志是 CRLF，
+# 而 Java 正则里 `.` 不匹配 `\r`，于是按行判定的正则（如 ^\d{4}-\d{2}-\d{2}.*）全部失配，
+# 体裁判定与按行保护一起失效。压进来的日志格式要处理，仓库自己的文件就别再制造同类问题了：
+# 在 Windows 上 checkout 得到 CRLF、在 Linux 上得到 LF，会让同一份源码在不同机器上行为不同。
+* text=auto eol=lf
+
+# 二进制文件不做任何转换
+*.jar binary
+*.zip binary
+*.png binary
+*.jpg binary
+*.gif binary
+*.svg text eol=lf

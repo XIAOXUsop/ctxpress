@@ -27,7 +27,11 @@ jobs:
       - name: Publish release assets
         uses: softprops/action-gh-release@v2
         with:
+          # 路径是相对仓库根的。早先 core 那行多写了一层 `ctxpress/` 前缀，
+          # 于是这个 glob 永远匹配不到——而 action-gh-release 对未匹配的 glob 只告警不报错，
+          # release 照常发布、只是静默少一个资产。加 fail_on_unmatched_files 让它不再静默。
           files: |
             ctxpress-cli/target/ctxpress.jar
-            ctxpress/ctxpress-core/target/ctxpress-core-*.jar
+            ctxpress-core/target/ctxpress-core-*.jar
+          fail_on_unmatched_files: true
           generate_release_notes: true

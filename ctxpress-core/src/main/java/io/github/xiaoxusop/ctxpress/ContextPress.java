@@ -103,7 +103,7 @@ public final class ContextPress {
         if (compressor == null) {
             return PressResult.unchanged(content, kind, TokenEstimator.estimate(content));
         }
-        String normalized = normalizeLineEndings(content);
+        String normalized = normalize(content);
 
         // 已经放得下就不动它。
         // 这条判断是基准测试逼出来的：早先版本无论预算多大都按压缩器的结构默认值裁剪，
@@ -125,13 +125,20 @@ public final class ContextPress {
     }
 
     /**
-     * 归一化换行符。
+     * 入口归一化：换行符统一为 LF，并剥掉 UTF-8 BOM。
      *
-     * <p>必要性来自一次真实失败：Windows 日志是 CRLF，而 Java 正则里 {@code .} **不匹配 {@code \r}**，
-     * 于是按行判定的正则（如 {@code ^\d{4}-\d{2}-\d{2}.*}）全部失配，体裁判定与按行保护一起失效。
-     * 在入口处统一成 LF，是让"在 Windows 上采集的日志"和"在 Linux 上采集的日志"行为一致的最小代价。
+     * <p>换行符的必要性来自一次真实失败：Windows 日志是 CRLF，而 Java 正则里
+     * {@code .} **不匹配 {@code \r}**，于是按行判定的正则（如 {@code ^\d{4}-\d{2}-\d{2}.*}）
+     * 全部失配，体裁判定与按行保护一起失效。在入口处统一成 LF，是让"在 Windows 上采集的日志"
+     * 和"在 Linux 上采集的日志"行为一致的最小代价。
+     *
+     * <p>BOM 同理：{@code String.stripLeading()} 不认为 U+FEFF 是空白，
+     * 带 BOM 的 JSON 会以"首字符是 ﻿"的身份一路落到文本压缩器，结构压缩完全用不上。
+     * 放在入口一处，体裁判定与三个压缩器一起受益。
      */
-    private static String normalizeLineEndings(String content) {
-        return content.indexOf('\r') < 0 ? content : content.replace("\r\n", "\n").replace('\r', '\n');
+    private static String normalize(String content) {
+        String result = content.indexOf('\r') < 0 ? content
+                : content.replace("\r\n", "\n").replace('\r', '\n');
+        return ContextKind.stripBom(result);
     }
 }

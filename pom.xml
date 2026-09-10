@@ -6,11 +6,17 @@
 
     <groupId>io.github.xiaoxusop</groupId>
     <artifactId>ctxpress-parent</artifactId>
-    <version>0.1.0</version>
+    <version>0.2.0</version>
     <packaging>pom</packaging>
 
     <name>ctxpress</name>
-    <description>Agent 上下文压缩引擎：在工具输出/日志/RAG 片段进入 LLM 前做确定性、可审计、关键信息零丢失的压缩</description>
+    <!--
+      措辞是刻意收窄的。"关键信息零丢失"这种说法对 JSON 数组不成立，
+      而且与"塞进 N 个 token"在数学上互斥（预算不够时二者只能取一）。
+      下面这三句都是可离线断言的事实：命中保护规则的按构造保留；
+      未保护部分可经内容寻址归档逐字节取回；输出不含原文没有的内容。
+    -->
+    <description>Agent 上下文压缩引擎：在工具输出/日志/RAG 片段进入 LLM 前做确定性、可审计、可逆的压缩，并保证输出不超过给定 token 预算（做不到时如实声明）</description>
     <url>https://github.com/XIAOXUsop/ctxpress</url>
 
     <licenses>
@@ -59,5 +65,37 @@
                 </plugin>
             </plugins>
         </pluginManagement>
+
+        <plugins>
+            <!--
+              构建前的环境校验。加它是因为一次真实的困惑：本机 Maven 3.3.9 跑 `mvn package`
+              会撞上 maven-compiler-plugin 报的 "requires Maven version 3.6.3" —— 一句话里
+              提到的两个版本号都不是根因（根因是本地 mvn 太旧），排查成本远高于在这里早说一句。
+              README 里的 `./mvnw package` 路径不受影响，wrapper 自带 3.9.x。
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-enforcer-plugin</artifactId>
+                <version>3.5.0</version>
+                <executions>
+                    <execution>
+                        <id>enforce-build-environment</id>
+                        <goals>
+                            <goal>enforce</goal>
+                        </goals>
+                        <configuration>
+                            <rules>
+                                <requireMavenVersion>
+                                    <version>[3.6.3,)</version>
+                                </requireMavenVersion>
+                                <requireJavaVersion>
+                                    <version>[21,)</version>
+                                </requireJavaVersion>
+                            </rules>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
     </build>
 </project>

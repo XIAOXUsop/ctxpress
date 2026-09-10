@@ -1,5 +1,7 @@
 package io.github.xiaoxusop.ctxpress.compressor;
 
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -25,31 +27,50 @@ import java.util.Map;
  * 结构压缩则保持 JSON 合法，只是把"长数组"换成"首尾样本 + 计数"——
  * 模型仍能知道"有 500 条，首条长这样"，而不是看到一堆断掉的括号。
  *
- * <p>规则：
- * <ul>
- *   <li>对象：**保留全部键**（键名本身信息密度极高，删键会让模型误解数据形状）</li>
- *   <li>数组：超长时保留首尾样本，中间替换为 {@code {"_omitted": N}} 计数节点</li>
- *   <li>字符串：命中 {@code mustKeep} 的原样保留；过长且未命中的保留首尾并标注省略字数</li>
- *   <li>数值/布尔/null：一律保留（体积小、价值高）</li>
- * </ul>
+ * <p>三档，按信息损失从少到多：
+ * <ol>
+ *   <li><b>仅去空白</b>——只去掉缩进与换行，不改动任何结构。JSON 的缩进往往占掉可观比例，
+ *       去掉它们常常就够装进预算了；</li>
+ *   <li><b>截断超长字符串</b>——保留首尾并标注省略字数；</li>
+ *   <li><b>采样长数组</b>——保留首尾样本 + {@code {"_omitted": N}} 计数节点，
+ *       采样上限由预算反推，而不是一个固定数字。</li>
+ * </ol>
  *
- * <p>解析失败（非法 JSON）时**回退为文本压缩**，绝不抛异常中断 Agent 流程。
+ * <p>对象**保留全部键**（键名本身信息密度极高，删键会让模型误解数据形状）；
+ * 数值/布尔/null 一律保留。
+ *
+ * <p>解析失败时先判断是不是日志，是日志交 {@link LogCompressor}，
+ * 否则回退 {@link TextCompressor}——绝不抛异常中断 Agent 流程。
  */
 public final class JsonCompressor implements Compressor {
 
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+    /**
+     * 两个开关都是为了**不静默改数据**：
+     *
+     * <ul>
+     *   <li>{@code FAIL_ON_TRAILING_TOKENS}——不检查尾随内容时，NDJSON
+     *       （{@code {"a":1}\n{"b":2}\n{"c":3}}）会被解析成第一个文档，后面全部无声消失。
+     *       实测 420 token 的 30 行 NDJSON 被"压缩"到 14 token，而报告里
+     *       {@code truncated=false}、动作为空——看不出丢了东西。宁可判为"不是单个 JSON"
+     *       交给日志/文本压缩器，也不能假装压缩成功。</li>
+     *   <li>{@code STRICT_DUPLICATE_DETECTION}——重复键默认保留最后一个、丢弃前面的值。
+     *       JSON 规范没有定义该行为，与其替调用方选一个，不如判为非法。</li>
+     * </ul>
+     */
+    private static final ObjectMapper MAPPER = new ObjectMapper()
+            .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
+            .enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION);
 
     /** 单个字符串值超过此长度才考虑截断 */
     private static final int STRING_TRUNCATE_THRESHOLD = 512;
     private static final int STRING_HEAD = 320;
     private static final int STRING_TAIL = 96;
 
-    private final Compressor fallback = new TextCompressor();
+    /** 数组采样上限的搜索上界。真实文档里数组极少超过这个量级，再往上搜只是白费轮数。 */
+    private static final int MAX_ARRAY_LIMIT = 8192;
 
-    @Override
-    public ContextKind kind() {
-        return ContextKind.JSON;
-    }
+    private final Compressor textFallback = new TextCompressor();
+    private final Compressor logFallback = new LogCompressor();
 
     @Override
     public PressResult compress(String content, PressPolicy policy, String archiveRef) {
@@ -59,62 +80,195 @@ public final class JsonCompressor implements Compressor {
         try {
             root = MAPPER.readTree(content);
         } catch (Exception e) {
-            // 非法 JSON 不阻断流程：按文本处理，行为可预期
-            PressResult textResult = fallback.compress(content, policy, archiveRef);
-            List<String> actions = new ArrayList<>(textResult.report().actions());
-            actions.add(0, "JSON_PARSE_FAILED_FALLBACK_TO_TEXT");
-            return new PressResult(textResult.content(),
-                    new PressReport(ContextKind.JSON, originalTokens,
-                            textResult.report().compressedTokens(),
-                            textResult.report().reductionPercent(),
-                            textResult.report().protectedSegments(), actions),
-                    archiveRef);
+            return fallback(content, policy, archiveRef, originalTokens);
         }
 
+        // 档位一：仅去掉缩进与换行。
+        //
+        // 注意措辞：这**不是**"无损"。Jackson 会归一化数值字面量（1.00 → 1.0）、
+        // 把超出 double 范围的指数转成字符串（1e400 → "Infinity"）、丢超高精度小数的末尾位
+        // （0.1234567890123456789 → 0.12345678901234568），也会把 Unicode 转义还原成字符。
+        // 值等价，字节不等价。所以报告里写 MINIFIED_ONLY，文档里也只会说"仅去空白"。
+        //
+        // 这一档早先是完全缺失的，代价荒唐：129997 token 的 JSON 在 128000 预算下
+        // 只输出 132 token——而它去掉缩进后是 77494 token，明明装得下，
+        // 却把数组里 99.8% 的元素丢掉了。
+        String minified = root.toString();
+        int minifiedTokens = TokenEstimator.estimate(minified);
+        if (minifiedTokens <= policy.maxTokens()) {
+            return new PressResult(minified, new PressReport(ContextKind.JSON,
+                    originalTokens, minifiedTokens,
+                    TokenEstimator.reductionPercent(originalTokens, minifiedTokens),
+                    0, List.of("MINIFIED_ONLY")), null);
+        }
+
+        // 档位二/三：按预算裁剪。
         List<String> actions = new ArrayList<>();
-        int[] protectedCounter = {0};
-        // 是否真的裁剪过内容。不能用"actions 非空"来推断——数组采样本身不产生 action，
-        // 会导致"裁剪了却以为没裁剪"，归档引用就不会被写进文档（实测踩到过）。
-        boolean[] truncatedFlag = {false};
+        int[] protectedCount = {0};
+        boolean[] truncated = {false};
+        int largestArray = maxArraySize(root);
 
-        // 逐步收紧数组采样上限，直到落入预算；每轮都是纯函数，故整体确定
-        int limit = policy.maxArrayItems();
-        JsonNode compressed = null;
-        while (limit >= 1) {
-            protectedCounter[0] = 0;
-            compressed = shrink(root, policy, limit, protectedCounter, truncatedFlag);
-            String rendered = compressed.toString();
-            if (TokenEstimator.estimate(rendered) <= policy.maxTokens()) {
-                break;
-            }
-            limit = limit / 2;
-            if (limit < 1) {
-                break;
-            }
-        }
-        if (limit < policy.maxArrayItems()) {
-            actions.add("ARRAY_LIMIT_REDUCED_TO=" + Math.max(1, limit));
-        }
-        if (protectedCounter[0] > 0) {
-            actions.add("PROTECTED_JSON_VALUES=" + protectedCounter[0]);
-        }
+        // 归档引用本身也占 token，先从预算里扣掉。
+        // 早先是"先按预算检查、检查完再把 _ctxpress_archive 塞进对象"——
+        // 塞进去的那一刻就超出了预算。
+        int reserved = archiveRef == null ? 0 : archiveFieldCost();
+        int budget = Math.max(1, policy.maxTokens() - reserved);
 
-        // 真的发生了裁剪时，把归档入口写进结构里（根是对象才行；根是数组则只能通过 API 取回）
-        boolean truncated = truncatedFlag[0];
-        if (truncated && archiveRef != null && compressed.isObject()) {
-            ((ObjectNode) compressed).put("_ctxpress_archive", archiveRef);
-            actions.add("ARCHIVE_REF_EMBEDDED");
+        int[] probeCounters = new int[1];
+        boolean[] probeFlags = new boolean[1];
+        int limit = chooseArrayLimit(root, policy, largestArray, budget, probeCounters, probeFlags);
+
+        protectedCount[0] = 0;
+        truncated[0] = false;
+        JsonNode compressed = shrink(root, policy, limit, protectedCount, truncated);
+
+        if (limit < Math.min(MAX_ARRAY_LIMIT, Math.max(1, largestArray))) {
+            actions.add("ARRAY_SAMPLED_LIMIT=" + limit);
+        }
+        if (protectedCount[0] > 0) {
+            actions.add("PROTECTED_JSON_VALUES=" + protectedCount[0]);
+        }
+        if (truncated[0] && archiveRef != null) {
+            embedArchiveRef(compressed, root, limit, archiveRef, actions);
         }
 
         String rendered = compressed.toString();
         int compressedTokens = TokenEstimator.estimate(rendered);
-        if (compressedTokens > originalTokens) {
-            // 极小 JSON 上压缩反而变大（去掉空白与美化后仍可能如此），此时不压
-            return PressResult.unchanged(content, ContextKind.JSON, originalTokens);
+        int over = Math.max(0, compressedTokens - policy.maxTokens());
+        if (over > 0) {
+            actions.add("NOTHING_LEFT_TO_TRIM_EXCEPT_PROTECTED_VALUES");
         }
         return new PressResult(rendered, new PressReport(ContextKind.JSON, originalTokens, compressedTokens,
                 TokenEstimator.reductionPercent(originalTokens, compressedTokens),
-                protectedCounter[0], actions), truncated ? archiveRef : null);
+                protectedCount[0], actions, over), truncated[0] ? archiveRef : null);
+    }
+
+    /**
+     * 把归档引用嵌进内容，让读到它的模型知道怎么取回被压掉的原文。
+     *
+     * <p>只嵌在**根部**——字段是给"整份内容的取回入口"用的，嵌进每个嵌套对象既冗余又费 token。
+     *
+     * <p>根是数组时没有"字段"可写，退而把引用放进**根数组自己的 {@code _omitted} 计数节点**里。
+     * 这比包一层 {@code {"data": [...]}} 好：包一层会把根类型从数组变成对象，
+     * 强类型反序列化直接失败；而 {@code _omitted} 已经是个记账节点，再挂一个键只是元素级污染。
+     * 若根数组没被截断（只截了内层数组或字符串），就没有可承载的位置，如实记为不可嵌入。
+     */
+    private static void embedArchiveRef(JsonNode compressed, JsonNode root, int limit,
+                                        String archiveRef, List<String> actions) {
+        if (compressed.isObject()) {
+            ((ObjectNode) compressed).put("_ctxpress_archive", archiveRef);
+            actions.add("ARCHIVE_REF_EMBEDDED");
+            return;
+        }
+        int head = Math.max(1, limit / 2);
+        int tail = Math.max(1, limit - head);
+        if (compressed.isArray() && root.isArray() && root.size() > head + tail
+                && compressed.size() > head && compressed.get(head).isObject()) {
+            ((ObjectNode) compressed.get(head)).put("_ctxpress_archive", archiveRef);
+            actions.add("ARCHIVE_REF_EMBEDDED_IN_OMITTED_NODE");
+            return;
+        }
+        actions.add("ARCHIVE_REF_NOT_EMBEDDABLE");
+    }
+
+    /**
+     * 非法 JSON 的兜底。
+     *
+     * <p>先判是不是日志：{@code [INFO] ...} / {@code [2026-09-11 10:00:00] ...} 这类
+     * 方括号前缀的构建输出**以 {@code [} 开头**，会被当成 JSON 数组去解析、然后失败。
+     * 早先这里一律退回文本压缩，于是这类输入（Maven / Gradle / logback 默认格式，
+     * Agent 最高频的工具输出之一）压缩率恒为 0。
+     */
+    private PressResult fallback(String content, PressPolicy policy, String archiveRef, int originalTokens) {
+        Compressor delegate = ContextKind.detect(content) == ContextKind.LOG ? logFallback : textFallback;
+        PressResult result = delegate.compress(content, policy, archiveRef);
+        List<String> actions = new ArrayList<>(result.report().actions());
+        actions.add(0, "JSON_PARSE_FAILED_FALLBACK_TO_" + result.report().kind());
+        return new PressResult(result.content(), new PressReport(result.report().kind(), originalTokens,
+                result.report().compressedTokens(), result.report().reductionPercent(),
+                result.report().protectedSegments(), actions, result.report().overBudgetBy()),
+                result.archiveRef());
+    }
+
+    /** 归档字段写进内容时要额外占用的 token（ref 恒为 {@code ORIG-} + 16 位十六进制） */
+    private static int archiveFieldCost() {
+        return TokenEstimator.estimate(",\"_ctxpress_archive\":\"ORIG-0123456789abcdef\"");
+    }
+
+    /**
+     * 选择数组采样上限。
+     *
+     * <p><b>不能对整个区间二分</b>：当 limit 跨过某个数组的长度时，那个数组不再被截断、
+     * {@code {"_omitted":N}} 计数节点随之消失，渲染结果可能反而**变小**——实测 9 元素数组
+     * 在 limit=8 时输出 8 token，limit=9 时只有 5 token。谓词非单调，二分会选错边界。
+     *
+     * <p>所以先把"完全不截断数组"作为首选端点单独试——它是上面那个非单调点的正上方，
+     * 也是信息损失最小的解。不通过才进入搜索。
+     *
+     * <p>搜索区间取整个 {@code [1, ceiling]} 而不是"所有数组都处于截断态"的子区间：
+     * 后者只要文档里存在一个小数组就会塌缩（一个 2 元素数组会把区间压到 {@code [1,1]}，
+     * 于是 200 元素的数组被截到 3 个，而预算其实装得下 78 个）。
+     *
+     * <p>代价是二分会落在偏小的一侧（成本在数组长度边界处小幅回落，谓词不是严格单调）。
+     * 但**正确性不受影响**：每次探测都重新核实成本，{@code best} 只被赋值为验证通过的候选，
+     * 所以返回值一定满足预算——最坏情况只是截得比必要更狠一点。末尾再加一小段向上线性探测
+     * 把边界处的回落补回来。
+     *
+     * @return 可用的 limit，保证其成本不超过预算
+     */
+    private int chooseArrayLimit(JsonNode root, PressPolicy policy, int largestArray,
+                                 int budget, int[] counters, boolean[] flags) {
+        int ceiling = Math.min(MAX_ARRAY_LIMIT, Math.max(1, largestArray));
+        if (costAt(root, policy, ceiling, counters, flags) <= budget) {
+            return ceiling;   // 一个数组元素都不用丢
+        }
+        if (largestArray == 0) {
+            return 1;         // 文档里根本没有数组，没有可调的旋钮
+        }
+        int lo = 1;
+        int hi = Math.max(1, ceiling - 1);
+        int best = 0;
+        while (lo <= hi) {
+            int mid = (lo + hi) >>> 1;
+            if (costAt(root, policy, mid, counters, flags) <= budget) {
+                best = mid;
+                lo = mid + 1;
+            } else {
+                hi = mid - 1;
+            }
+        }
+        if (best == 0) {
+            return 1;         // 已最大程度截断仍装不下，交给上层如实上报
+        }
+        for (int candidate = best + 1; candidate < ceiling && candidate <= best + 32; candidate++) {
+            if (costAt(root, policy, candidate, counters, flags) <= budget) {
+                best = candidate;
+            }
+        }
+        return best;
+    }
+
+    private int costAt(JsonNode root, PressPolicy policy, int limit, int[] counters, boolean[] flags) {
+        counters[0] = 0;
+        flags[0] = false;
+        return TokenEstimator.estimate(shrink(root, policy, limit, counters, flags).toString());
+    }
+
+    /** 文档里最长的数组有多长——数组采样上限的搜索上界 */
+    private static int maxArraySize(JsonNode node) {
+        int max = 0;
+        if (node.isArray()) {
+            max = node.size();
+            for (JsonNode element : node) {
+                max = Math.max(max, maxArraySize(element));
+            }
+        } else if (node.isObject()) {
+            Iterator<JsonNode> children = node.elements();
+            while (children.hasNext()) {
+                max = Math.max(max, maxArraySize(children.next()));
+            }
+        }
+        return max;
     }
 
     private JsonNode shrink(JsonNode node, PressPolicy policy, int arrayLimit,
@@ -130,22 +284,25 @@ public final class JsonCompressor implements Compressor {
         }
         if (node.isArray()) {
             ArrayNode result = JsonNodeFactory.instance.arrayNode();
-            if (node.size() <= arrayLimit) {
+            int head = Math.max(1, arrayLimit / 2);
+            int tail = Math.max(1, arrayLimit - head);
+            // 装得下就整体保留。截断后保留的元素数不比原来少时更不该截——
+            // 早先会在这种情形下往数组里插一个 {"_omitted":0}，既凭空多出一个外来元素，
+            // 又把一个根本没被动过的数组标成"已截断"。
+            if (node.size() <= arrayLimit || node.size() <= head + tail) {
                 for (JsonNode element : node) {
                     result.add(shrink(element, policy, arrayLimit, protectedCounter, truncatedFlag));
                 }
                 return result;
             }
             truncatedFlag[0] = true;
-            int head = Math.max(1, arrayLimit / 2);
-            int tail = Math.max(1, arrayLimit - head);
             for (int i = 0; i < head; i++) {
                 result.add(shrink(node.get(i), policy, arrayLimit, protectedCounter, truncatedFlag));
             }
             ObjectNode omitted = JsonNodeFactory.instance.objectNode();
             omitted.put("_omitted", node.size() - head - tail);
             result.add(omitted);
-            for (int i = node.size() - tail; i < node.size(); i++) {
+            for (int i = Math.max(head, node.size() - tail); i < node.size(); i++) {
                 result.add(shrink(node.get(i), policy, arrayLimit, protectedCounter, truncatedFlag));
             }
             return result;

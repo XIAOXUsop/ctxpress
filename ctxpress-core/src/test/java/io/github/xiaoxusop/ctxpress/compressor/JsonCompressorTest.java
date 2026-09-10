@@ -11,6 +11,7 @@ import java.util.stream.IntStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** JSON 压缩：结构自洽、数组采样、键不丢、关键值保护。 */
@@ -32,12 +33,34 @@ class JsonCompressorTest {
         assertTrue(result.report().effective(), result.report().summary());
     }
 
+    /**
+     * 预算装得下"仅去掉空白"的结果时，**一个元素都不该丢**。
+     *
+     * <p>这条契约早先根本不存在：压缩器从 {@code maxArrayItems}（默认 8）起步、循环只会
+     * {@code limit / 2} 缩小从不增长，于是采样上限与预算无关——8528 token 的检索结果在
+     * 2500 / 4000 / 8000 三个预算下输出**完全相同**的 515 token，预算给多了也不会多留内容。
+     */
+    @Test
+    void minifiesWithoutDroppingElementsWhenWhitespaceAloneFitsTheBudget() throws Exception {
+        String json = "{\"rows\":[\n" + IntStream.range(0, 100)
+                .mapToObj(i -> "  {\"id\":" + i + "}").collect(Collectors.joining(",\n")) + "\n]}";
+
+        PressResult result = compressor.compress(json, PressPolicy.builder().maxTokens(300).build());
+        JsonNode rows = MAPPER.readTree(result.content()).get("rows");
+
+        assertEquals(100, rows.size(), "去掉空白就装得下，不该丢任何元素：" + result.report().summary());
+        assertTrue(result.report().actions().contains("MINIFIED_ONLY"), result.report().summary());
+    }
+
     @Test
     void shrinksLongArraysWithExplicitOmittedCount() throws Exception {
+        // 预算必须小到"仅去空白"也装不下，才谈得上截断——
+        // 早先这条测试给的预算（120）其实装得下全部 100 条，于是它把
+        // "预算够却硬要截断"这个缺陷固化成了正确行为。
         String json = "{\"rows\":[" + IntStream.range(0, 100)
                 .mapToObj(i -> String.valueOf(i)).collect(Collectors.joining(",")) + "]}";
 
-        PressResult result = compressor.compress(json, PressPolicy.builder().maxTokens(120).build());
+        PressResult result = compressor.compress(json, PressPolicy.builder().maxTokens(64).build());
         JsonNode rows = MAPPER.readTree(result.content()).get("rows");
 
         assertTrue(rows.size() < 100, "数组应被采样：" + result.content());
@@ -49,6 +72,23 @@ class JsonCompressorTest {
             }
         }
         assertTrue(hasOmittedMarker, "必须用显式计数节点说明省略了多少条：" + result.content());
+    }
+
+    /** 没被截断的数组不该被注入 {@code {"_omitted":0}}——那既凭空多出元素，又把没动过的数组标成"已截断" */
+    @Test
+    void shortArraysAreLeftIntactEvenAtTinyArrayLimit() throws Exception {
+        String json = "{\"big\":[" + IntStream.range(0, 200)
+                .mapToObj(i -> String.valueOf(i)).collect(Collectors.joining(","))
+                + "],\"small\":[1,2]}";
+
+        PressResult result = compressor.compress(json, PressPolicy.builder().maxTokens(64).build());
+        JsonNode small = MAPPER.readTree(result.content()).get("small");
+
+        assertEquals(2, small.size(), "没超上限的数组不该被注入记账节点：" + result.content());
+        for (JsonNode element : small) {
+            assertFalse(element.isObject() && element.has("_omitted"),
+                    "小数组里出现了 _omitted 节点：" + result.content());
+        }
     }
 
     @Test

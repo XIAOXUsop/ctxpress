@@ -9,3 +9,8 @@ Thumbs.db
 
 # 基准数据由 benchmarks/generate.py 生成
 benchmarks/data/
+
+# 预算矩阵的测量结果由 benchmarks/budget_matrix.py 生成。
+# 不入库：它是"当时的测量"，入库就会过期，而 README 引用的是跑出来的数字。
+# CI 每次都会重跑这张矩阵当门禁。
+benchmarks/budget-matrix.json

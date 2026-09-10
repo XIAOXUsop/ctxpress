@@ -72,12 +72,73 @@ def rag_chunks(path):
         f.write("\n\n".join(chunks))
 
 
+def en_prose(path):
+    """英文散文：句末用 ASCII 句点。
+
+    这一形态曾让压缩器把整篇文档压成 5 个 token——切句正则不认 ASCII 句点，
+    整篇被当成"一句话"，头尾循环又一条都装不下，于是只剩一个省略标记。
+    英文技术文档、README、模型输出都是这个形态。
+    """
+    random.seed(SEED)
+    subjects = ["the screening engine", "the case reviewer", "the reconciliation job",
+                "the alert pipeline", "the audit trail", "the rule evaluator"]
+    verbs = ["flagged", "escalated", "rejected", "confirmed", "queued", "archived"]
+    objects = ["the counterparty", "the transaction batch", "the supporting document",
+               "the risk score", "the regulatory filing", "the customer profile"]
+    sentences = []
+    for _ in range(400):
+        sentences.append("%s %s %s during the nightly run." % (
+            random.choice(subjects), random.choice(verbs), random.choice(objects)))
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(" ".join(sentences))
+
+
+def bracketed_log(path):
+    """方括号前缀日志：logback / log4j2 默认 ConsoleAppender 的格式。
+
+    也曾是最常见的构建输出格式（Maven / Gradle 的 [INFO] / [ERROR]）。
+    这一形态曾被判成 JSON——首字符是 `[`，于是走 JSON 分支、解析失败、退回 TEXT，
+    压缩率 0.0%；而按 LOG 处理能压掉 60% 以上。
+    """
+    random.seed(SEED)
+    levels = ["INFO", "INFO", "INFO", "WARN", "ERROR"]
+    lines = []
+    for i in range(3000):
+        lines.append("[2026-09-11 10:%02d:%02d] %-5s txn=TXN%06d amount %d CNY counterparty=CP%04d" % (
+            i // 60 % 60, i % 60, random.choice(levels), i,
+            random.randint(100, 999999), i % 500))
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+
+
+def big_array(path):
+    """根为数组的大 JSON：工具返回值最朴素的形态。
+
+    这一形态暴露过两个问题：预算给到 128000 却只输出 132 token（数组采样上限
+    固定为 8，循环只会缩小不会增长）；以及根是数组时归档引用无处可写——
+    `_ctxpress_archive` 是作为字段注入的，数组没有字段。
+    """
+    random.seed(SEED)
+    rows = [{"id": i, "score": round(random.uniform(0, 1), 4),
+             "path": "src/main/java/com/example/Service%d.java" % i}
+            for i in range(5000)]
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(rows, f, indent=2)
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
-    mcp_search_results(os.path.join(OUT, "mcp-search-results.json"))
-    app_log(os.path.join(OUT, "app.log"))
-    rag_chunks(os.path.join(OUT, "rag-chunks.txt"))
-    for name in ("mcp-search-results.json", "app.log", "rag-chunks.txt"):
+    names = {
+        "mcp-search-results.json": mcp_search_results,
+        "app.log": app_log,
+        "rag-chunks.txt": rag_chunks,
+        "en-prose.txt": en_prose,
+        "bracketed.log": bracketed_log,
+        "big-array.json": big_array,
+    }
+    for name, fn in names.items():
+        fn(os.path.join(OUT, name))
+    for name in names:
         p = os.path.join(OUT, name)
         print("%-28s %8d bytes" % (name, os.path.getsize(p)))
 

@@ -27,34 +27,41 @@ jobs:
       - name: Build and test
         run: ./mvnw -B verify
 
-      - name: Smoke-test the CLI on a realistic log
+      # 门禁跑的是**真实的预算契约矩阵**，不是"压缩率够不够高"。
+      #
+      # 早先这条门禁用一份只有 9 种变体的合成日志强制 ratio > 0.90 —— 那恰恰是
+      # benchmarks/generate.py 开头批判的取样方式：拿高度重复的数据测出好看的数字。
+      # 而且"压缩率"本身与成本只是弱相关（实测两篇论文的相关系数 r=0.15），
+      # 把它当门禁会奖励"压得更狠"，而压得更狠正是丢信息的方向。
+      #
+      # 现在门禁直接断言这个库唯一的产品承诺：**输出 ≤ 你给的预算，或如实声明做不到**。
+      - name: Verify the budget contract across the whole matrix
         run: |
-          mkdir -p /tmp/demo
-          # 生成一份含重复、故障行与金额的日志，验证端到端可用性
+          python3 benchmarks/generate.py
+          python3 benchmarks/budget_matrix.py
           python3 - <<'PY'
-          import random
-          random.seed(42)
-          lines = []
-          for i in range(3000):
-              if i % 7 == 0:
-                  lines.append(f"2026-09-11 10:{i//60%60:02d}:{i%60:02d} WARN  retry {i%9} for tx AML-2026-{i:05d}")
-              elif i % 500 == 0:
-                  lines.append(f"2026-09-11 10:{i//60%60:02d}:{i%60:02d} ERROR Caused by java.sql.SQLException: pool exhausted")
-              else:
-                  lines.append(f"2026-09-11 10:{i//60%60:02d}:{i%60:02d} INFO  processed record {i} amount {random.uniform(100,99999):.2f} CNY")
-          open('/tmp/demo/big.log', 'w', encoding='utf-8').write('\n'.join(lines))
+          import io, json
+          report = json.load(io.open('benchmarks/budget-matrix.json', encoding='utf-8'))
+          s = report['summary']
+          print("cases=%(cases)d counted=%(counted)d violated=%(violated)d "
+                "declared=%(declared)d underfilled=%(underfilled)d" % s)
+          assert s['violated'] == 0, "预算契约被违反 %d 次" % s['violated']
+          assert s['compliance'] == 1.0, "遵守率 %.1f%%" % (s['compliance'] * 100)
+          assert s['underfilled'] == 0, "有 %d 个用例几乎没把预算用上" % s['underfilled']
           PY
 
-          java -jar ctxpress-cli/target/ctxpress.jar analyze /tmp/demo/big.log
-          java -jar ctxpress-cli/target/ctxpress.jar compress --max-tokens 800 /tmp/demo/big.log > /tmp/demo/small.log
+      - name: Protected content must survive at any budget
+        run: |
+          mkdir -p /tmp/gate
+          printf '%s\n' \
+            '2026-09-11 10:00:00 INFO  普通日志行 1' \
+            '2026-09-11 10:00:00 INFO  普通日志行 2' \
+            > /tmp/gate/pad.log
+          for i in $(seq 1 2000); do
+            echo "2026-09-11 10:00:00 INFO  ordinary line $i" >> /tmp/gate/pad.log
+          done
+          echo "2026-09-11 10:00:01 ERROR Caused by java.sql.SQLException: AML-9999 pool exhausted" >> /tmp/gate/pad.log
 
-          # 门禁：必须真的压下来，且故障行必须保留
-          python3 - <<'PY'
-          import io
-          orig = io.open('/tmp/demo/big.log', encoding='utf-8').read()
-          comp = io.open('/tmp/demo/small.log', encoding='utf-8').read()
-          ratio = 1 - len(comp) / len(orig)
-          print(f"reduction = {ratio:.1%}")
-          assert ratio > 0.90, f"压缩率不足: {ratio:.1%}"
-          assert "Caused by" in comp, "故障行被压掉了"
-          PY
+          java -jar ctxpress-cli/target/ctxpress.jar compress --max-tokens 200 /tmp/gate/pad.log > /tmp/gate/small.log
+          grep -q "AML-9999" /tmp/gate/small.log || { echo "受保护内容被压掉了"; exit 1; }
+          grep -q "Caused by" /tmp/gate/small.log || { echo "异常链被压掉了"; exit 1; }
