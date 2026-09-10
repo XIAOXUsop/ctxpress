@@ -33,5 +33,6 @@ jobs:
           files: |
             ctxpress-cli/target/ctxpress.jar
             ctxpress-core/target/ctxpress-core-*.jar
+            ctxpress-tokenizer-jtokkit/target/ctxpress-tokenizer-jtokkit-*.jar
           fail_on_unmatched_files: true
           generate_release_notes: true
