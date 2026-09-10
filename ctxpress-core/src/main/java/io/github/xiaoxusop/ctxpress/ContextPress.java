@@ -64,11 +64,11 @@ public final class ContextPress {
 
     /** 默认策略 + 可逆归档 */
     public static ContextPress withArchive() {
-        return new ContextPress(PressPolicy.defaults(), new ContextArchive());
+        return new ContextPress(PressPolicy.defaults(), ContextArchive.inMemory());
     }
 
     public static ContextPress withArchive(PressPolicy policy) {
-        return new ContextPress(policy, new ContextArchive());
+        return new ContextPress(policy, ContextArchive.inMemory());
     }
 
     public static ContextPress withArchive(PressPolicy policy, ContextArchive archive) {
@@ -103,20 +103,27 @@ public final class ContextPress {
         if (compressor == null) {
             return PressResult.unchanged(content, kind, policy.tokenCounter().count(content));
         }
-        String normalized = normalize(content);
-
         // 已经放得下就不动它。
         // 这条判断是基准测试逼出来的：早先版本无论预算多大都按压缩器的结构默认值裁剪，
         // 于是一份 8528 token 的内容在 20000 的预算下照样被压到 515 —— 内容明明放得下，
         // 却付了信息损失的代价。「能装下就别动」是压缩器最不该违背的契约。
-        int tokens = policy.tokenCounter().count(normalized);
-        if (tokens <= policy.maxTokens()) {
-            return PressResult.unchanged(normalized, kind, tokens);
+        //
+        // 注意返回的是**未归一化的原始内容**：归一化是为了正确处理 CRLF 日志，
+        // 但"放得下"就不该顺手改掉调用方给的字节。
+        int originalTokens = policy.tokenCounter().count(content);
+        if (originalTokens <= policy.maxTokens()) {
+            return PressResult.unchanged(content, kind, originalTokens);
         }
+
+        String normalized = normalize(content);
 
         // 归档引用要在压缩前算出来（压缩器需要把它写进省略标记），
         // 若最终没发生压缩则丢弃，避免留下无用条目。
-        String ref = archive == null ? null : archive.store(normalized);
+        //
+        // 存的是**归一化之前的原文**。归档的职责是"把我给你的原样还我"，
+        // 而 CRLF 输入经归一化后每行少一个字节——实测 3000 行日志会少 2999 字节，
+        // 于是"逐字节取回"名不副实。存原文才对得上这句话。
+        String ref = archive == null ? null : archive.store(content);
         PressResult result = compressor.compress(normalized, policy, ref);
         if (ref != null && !result.reversible()) {
             archive.discard(ref);

@@ -90,7 +90,7 @@ class ReversibilityTest {
 
     @Test
     void archiveRefIsContentAddressedSoRepeatsShareOneEntry() {
-        ContextArchive archive = new ContextArchive();
+        ContextArchive archive = ContextArchive.inMemory();
         String original = bigLog(300);
 
         String first = archive.store(original);
@@ -102,7 +102,7 @@ class ReversibilityTest {
 
     @Test
     void archiveIsBoundedToAvoidUnboundedMemoryGrowth() {
-        ContextArchive archive = new ContextArchive(2);
+        ContextArchive archive = ContextArchive.inMemory(2);
 
         archive.store("第一段原文");
         archive.store("第二段原文");
@@ -118,5 +118,24 @@ class ReversibilityTest {
         assertTrue(press.retrieve(null).isEmpty());
         assertTrue(press.retrieve("ORIG-deadbeefdeadbeef").isEmpty());
         assertNotNull(press.retrieve("ORIG-deadbeefdeadbeef"));
+    }
+
+    /**
+     * CRLF 输入也必须**逐字节**取回。
+     *
+     * <p>归档早先存的是归一化之后的副本（CRLF 被统一成 LF），而"逐字节一致"是对调用方
+     * 给的**原文**说的——3000 行日志差 2999 个字节，这个承诺就不成立了。
+     * 归档存原文，归一化只用于压缩过程本身。
+     */
+    @Test
+    void crlfInputIsRetrievedByteForByteAsGiven() {
+        ContextPress press = ContextPress.withArchive(PressPolicy.builder().maxTokens(200).build());
+        String crlf = bigLog(500).replace("\n", "\r\n");
+
+        PressResult result = press.press(crlf);
+
+        assertTrue(result.reversible());
+        assertEquals(crlf, press.retrieve(result.archiveRef()).orElseThrow(),
+                "取回的必须是调用方给的原文，而不是归一化之后的副本");
     }
 }

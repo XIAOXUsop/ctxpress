@@ -124,7 +124,22 @@ press.retrieve(result.archiveRef())     // 后续需要时取回原文，逐字�
 只标注"省略了 N 行"而不说怎么取回，等于让模型明知有缺失却无从补救。
 
 归档是**内容寻址**（`ORIG-` + SHA-256 前 16 位）：同一段原文重复压缩只存一份，
-且引用稳定。默认有界（256 条，LRU），因为无上限的归档就是内存泄漏。
+且引用稳定——换了后端、重启了进程，同一个 ref 依然指向同一段内容。这正是它能落盘的前提。
+
+两种后端：
+
+| 后端 | 生命周期 | 适用 |
+|---|---|---|
+| `ContextArchive.inMemory()`（默认） | 进程内，有界 256 条 LRU | 压缩与取回在同一次运行里完成 |
+| `FileContextArchive.open(path)` | 跨进程，追加式 | 先压缩写入、之后（甚至另一个进程）再取回 |
+
+```java
+ContextArchive archive = FileContextArchive.open(Path.of(".ctxpress/archive.log"));
+ContextPress press = ContextPress.withArchive(Policy.builder().maxTokens(2000).build(), archive);
+```
+
+> 归档里存的是**调用方给的原文**，不是归一化之后的副本——CRLF 输入经归一化后每行少一个字节，
+> 存副本会让"逐字节取回"名不副实（实测 3000 行日志差 2999 字节）。
 
 > 根为数组的 JSON 没有"字段"可写，引用会被放进数组自己的 `{"_omitted": …}` 计数节点里——
 > 那已经是个记账节点，再挂一个键只是元素级污染，而包一层 `{"data": […]}` 会把根类型
@@ -182,6 +197,14 @@ cat huge.json | java -jar ctxpress-cli/target/ctxpress.jar compress --max-tokens
 
 # 自定义保护规则
 java -jar ctxpress-cli/target/ctxpress.jar compress --must-keep 'TRACE-[0-9A-F]+' app.log
+
+# 可逆：压掉的原文进归档，报告行里给出引用，随时取回（逐字节一致）
+java -jar ctxpress-cli/target/ctxpress.jar compress --max-tokens 2000 \
+    --archive .ctxpress/archive.log app.log > small.log
+#   → 报告(stderr)：LOG: 97999 -> 1973 tokens (-98.0%), …, 归档=ORIG-30f2518ba6415194
+
+java -jar ctxpress-cli/target/ctxpress.jar retrieve \
+    --archive .ctxpress/archive.log --ref ORIG-30f2518ba6415194 > restored.log
 ```
 
 选项：`--max-tokens N` · `--kind JSON|LOG|TEXT` · `--must-keep REGEX` · `--head N` · `--tail N`
@@ -252,13 +275,14 @@ headroom 用不了。
   报告里却是"压缩成功、无省略、不可逆"。宁可判为非法交给日志压缩器，也不静默丢数据。
 - **单条消息级压缩，不做会话级调度。** 何时压、压到多少，由调用方决定；
   本库不管理会话历史，也不做类型化保留与依赖感知驱逐。
-- **归档默认只存内存。** 进程重启即失效（引用是内容寻址的，所以落盘扩展是天然的下一步）。
+- **归档默认只存内存。** 需要跨进程取回就用 `FileContextArchive.open(path)`（追加式文件，
+  命令行加 `--archive`）。文件后端只增不改：删除不做，因为归档的价值在于"还在"。
 - **不做语义摘要。** 要不要"用模型概括历史"是另一个问题；本库只做确定性压缩。
 
 ## 测试
 
 ```bash
-./mvnw test      # 71 项，全部离线
+./mvnw test      # 82 项，全部离线
 ```
 
 覆盖的四条不变量比功能本身更重要：
@@ -296,6 +320,17 @@ v0.2.0 修复的（这些是上面那些修复**没有覆盖到**的部分）：
 14. **`{"_omitted":0}` 注入** —— 没超上限的数组被塞进一个记账节点，还被标成"已截断"
 15. **CLI 缺参抛裸栈迹**、异常路径中文乱码、输出在 Windows 上多出 CRLF、未知命令报错类型错
 16. **release 资产路径多一层前缀** —— core 的 jar 永不匹配、静默缺失
+
+v0.3.0 的（前两轮的漏网之鱼）：
+
+17. **归档存的是归一化副本而非原文** —— CRLF 输入每行少一个字节，3000 行日志差 2999 字节，
+    "逐字节取回"名不副实。端到端实跑（压缩 → 另起进程取回 → 比对字节）才测出来
+18. **可逆在命令行完全不可达** —— 归档只在 Java API 可用，而 README 整节「可逆」
+    面向的正是命令行用户。等于把最核心的差异化能力锁在了 API 里
+19. **中段按"均匀撒孤立点"采样** —— 孤立点夹在两段省略区之间要多付一个省略标记
+    （标记约 7 token、一行日志约 11 token），同样预算下能覆盖的位置远少于连续块。
+    保真评测量到未受保护召回一度低于最朴素的均匀行采样，改为铺连续块后翻倍
+20. **启发式 token 估算低估 37%** —— 同一份日志它给 68,571、`o200k_base` 给 109,398
 
 ## License
 

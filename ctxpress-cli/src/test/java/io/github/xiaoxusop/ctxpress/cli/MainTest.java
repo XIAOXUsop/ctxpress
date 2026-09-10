@@ -1,6 +1,7 @@
 package io.github.xiaoxusop.ctxpress.cli;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -147,5 +148,69 @@ class MainTest {
 
         assertEquals(0, result.code());
         assertEquals(small, result.out().stripTrailing());
+    }
+
+    // ---------- 可逆：命令行也能取回 ----------
+
+    private static final java.util.regex.Pattern ARCHIVE_REF =
+            java.util.regex.Pattern.compile("归档=(ORIG-[0-9a-f]{16})");
+
+    /**
+     * 压缩 → 取回，**逐字节一致**。
+     *
+     * <p>这条路径早先是完全不存在的：归档只在 Java API 可用，命令行压缩完就再也拿不回
+     * 被压掉的部分——而 README 里整节「可逆」面向的正是命令行用户。
+     * 等于把最核心的差异化能力锁在了 API 里。
+     */
+    @Test
+    void compressedContentCanBeRetrievedVerbatimFromTheCli(@TempDir java.nio.file.Path dir) {
+        String original = log(2000);
+        String archive = dir.resolve("archive.log").toString();
+
+        Invocation compressed = invoke(original.getBytes(StandardCharsets.UTF_8),
+                "compress", "--max-tokens", "200", "--archive", archive);
+        assertEquals(0, compressed.code(), compressed.err());
+
+        java.util.regex.Matcher matcher = ARCHIVE_REF.matcher(compressed.err());
+        assertTrue(matcher.find(), "报告行里应给出归档引用：" + compressed.err());
+        String ref = matcher.group(1);
+
+        // 另起一次调用取回——归档的意义就在于跨进程有效
+        Invocation retrieved = invoke("retrieve", "--archive", archive, "--ref", ref);
+
+        assertEquals(0, retrieved.code(), retrieved.err());
+        assertEquals(original, retrieved.out().stripTrailing(), "取回的内容必须与原文逐字节相同");
+    }
+
+    /** 没指定归档时不该冒出引用——那会让调用方以为能取回 */
+    @Test
+    void noArchiveRefIsReportedWhenArchiveIsNotConfigured() {
+        Invocation result = invoke(log(2000).getBytes(StandardCharsets.UTF_8),
+                "compress", "--max-tokens", "200");
+
+        assertEquals(0, result.code());
+        assertFalse(result.err().contains("归档="), result.err());
+    }
+
+    @Test
+    void retrieveRequiresBothArchiveAndRef() {
+        Invocation noRef = invoke("retrieve", "--archive", "whatever.log");
+        assertEquals(1, noRef.code());
+        assertTrue(noRef.err().contains("--ref"), noRef.err());
+
+        Invocation noArchive = invoke("retrieve", "--ref", "ORIG-0000000000000000");
+        assertEquals(1, noArchive.code());
+        assertTrue(noArchive.err().contains("--archive"), noArchive.err());
+    }
+
+    /** 引用不存在时用独立退出码，好让脚本把它与"用法错"分开处理 */
+    @Test
+    void unknownRefGetsItsOwnExitCode(@TempDir java.nio.file.Path dir) {
+        Invocation result = invoke("retrieve",
+                "--archive", dir.resolve("archive.log").toString(),
+                "--ref", "ORIG-0000000000000000");
+
+        assertEquals(4, result.code(), result.err());
+        assertTrue(result.err().contains("ORIG-0000000000000000"), result.err());
     }
 }

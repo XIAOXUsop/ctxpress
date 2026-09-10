@@ -1,7 +1,9 @@
 package io.github.xiaoxusop.ctxpress.cli;
 
+import io.github.xiaoxusop.ctxpress.ContextArchive;
 import io.github.xiaoxusop.ctxpress.ContextKind;
 import io.github.xiaoxusop.ctxpress.ContextPress;
+import io.github.xiaoxusop.ctxpress.FileContextArchive;
 import io.github.xiaoxusop.ctxpress.PressPolicy;
 import io.github.xiaoxusop.ctxpress.PressResult;
 import io.github.xiaoxusop.ctxpress.tokenizer.jtokkit.JtokkitTokenCounter;
@@ -32,6 +34,8 @@ public final class Main {
     private static final int EXIT_USAGE = 1;
     private static final int EXIT_READ_FAILED = 2;
     private static final int EXIT_INTERNAL = 3;
+    /** 取回时引用不存在（或归档被清理过）——与"用法错"区分开，脚本才能分别处理 */
+    private static final int EXIT_REF_NOT_FOUND = 4;
 
     /** 退回核心模块的启发式估算（CJK 1 token/字，其余 4 字符/token） */
     private static final String HEURISTIC_TOKENIZER = "heuristic";
@@ -68,8 +72,8 @@ public final class Main {
 
         String command = args[0];
         // 命令先校验：早先未知命令会被当成文件名，报"读取失败"（rc=2）而不是用法错误（rc=1）
-        if (!"compress".equals(command) && !"analyze".equals(command)) {
-            err.println("ctxpress: 未知命令 '" + command + "'（可用：compress / analyze）");
+        if (!"compress".equals(command) && !"analyze".equals(command) && !"retrieve".equals(command)) {
+            err.println("ctxpress: 未知命令 '" + command + "'（可用：compress / analyze / retrieve）");
             return EXIT_USAGE;
         }
 
@@ -115,6 +119,22 @@ public final class Main {
                     options.tokenizer = value;
                     i++;
                 }
+                case "--archive" -> {
+                    String value = nextArg(args, i + 1, err, arg);
+                    if (value == null) {
+                        return EXIT_USAGE;
+                    }
+                    options.archivePath = Path.of(value);
+                    i++;
+                }
+                case "--ref" -> {
+                    String value = nextArg(args, i + 1, err, arg);
+                    if (value == null) {
+                        return EXIT_USAGE;
+                    }
+                    options.ref = value;
+                    i++;
+                }
                 case "--head" -> {
                     Integer value = intArg(args, i + 1, err, arg);
                     if (value == null) {
@@ -141,6 +161,10 @@ public final class Main {
             }
         }
 
+        if ("retrieve".equals(command)) {
+            return runRetrieve(options, out, err);
+        }
+
         String content;
         try {
             content = file == null ? new String(in.readAllBytes(), StandardCharsets.UTF_8)
@@ -164,7 +188,12 @@ public final class Main {
             if (!HEURISTIC_TOKENIZER.equals(options.tokenizer)) {
                 builder.tokenCounter(JtokkitTokenCounter.of(options.tokenizer));
             }
-            press = ContextPress.with(builder.build());
+            press = options.archivePath == null
+                    ? ContextPress.with(builder.build())
+                    : ContextPress.withArchive(builder.build(), FileContextArchive.open(options.archivePath));
+        } catch (IOException e) {
+            err.println("ctxpress: 打开归档失败: " + e.getMessage());
+            return EXIT_READ_FAILED;
         } catch (RuntimeException e) {
             // 参数越界由策略层抛 IllegalArgumentException，这里转成用法错误而不是内部错误
             err.println("ctxpress: " + e.getMessage());
@@ -173,6 +202,11 @@ public final class Main {
 
         PressResult result = options.kind == null ? press.press(content) : press.press(content, options.kind);
         String report = result.report().summary() + ", tokenizer=" + options.tokenizer;
+        if (result.reversible()) {
+            // 把引用单独放进报告行，脚本可以直接取走——内容里的省略标记是给人/模型看的，
+            // 从文本里正则抠引用既脆弱又容易在标记格式变动时静默失效
+            report += ", 归档=" + result.archiveRef();
+        }
 
         if ("analyze".equals(command)) {
             out.print(report);
@@ -188,6 +222,38 @@ public final class Main {
         err.print(report);
         err.print('\n');
         return 0;
+    }
+
+    /**
+     * 取回被压掉的原文。
+     *
+     * <p>没有这条路径时，"可逆"只有在写 Java 代码时才用得到——而 README 里整节「可逆」
+     * 面向的正是命令行用户：他们拿到的是一个 fat jar，压完就再也拿不回被压掉的部分。
+     * 那等于把最核心的差异化能力锁在了 API 里。
+     */
+    private static int runRetrieve(Options options, PrintStream out, PrintStream err) {
+        if (options.archivePath == null) {
+            err.println("ctxpress: retrieve 需要 --archive <归档路径>");
+            return EXIT_USAGE;
+        }
+        if (options.ref == null) {
+            err.println("ctxpress: retrieve 需要 --ref <引用>");
+            return EXIT_USAGE;
+        }
+        try {
+            ContextArchive archive = FileContextArchive.open(options.archivePath);
+            java.util.Optional<String> content = archive.retrieve(options.ref);
+            if (content.isEmpty()) {
+                err.println("ctxpress: 归档里没有 " + options.ref + "（当前共 " + archive.size() + " 条）");
+                return EXIT_REF_NOT_FOUND;
+            }
+            out.print(content.get());
+            out.print('\n');
+            return 0;
+        } catch (IOException e) {
+            err.println("ctxpress: 打开归档失败: " + e.getMessage());
+            return EXIT_READ_FAILED;
+        }
     }
 
     /**
@@ -225,6 +291,7 @@ public final class Main {
                 用法:
                   ctxpress compress [选项] [文件]    压缩并输出到 stdout（报告到 stderr）
                   ctxpress analyze  [选项] [文件]    只输出压缩效果报告
+                  ctxpress retrieve --archive F --ref R   取回被压掉的原文（逐字节一致）
 
                 选项:
                   --max-tokens N     压缩目标上限（默认 8000，最少 64）
@@ -234,9 +301,11 @@ public final class Main {
                   --tail N           保留尾部行数（默认 20）
                   --tokenizer T      o200k_base（默认）| cl100k_base | r50k_base | p50k_base | heuristic
                                      token 以此为计数口径；报告里会标注实际用词表
+                  --archive F        归档文件（追加式）。指定后可逆：
+                                     报告行里给出 归档=ORIG-xxxx，随时可用 retrieve 取回
 
                 不指定文件时从 stdin 读取。全离线，不调用任何模型。
-                退出码：0 成功 · 1 用法错误 · 2 读取失败 · 3 内部错误
+                退出码：0 成功 · 1 用法错误 · 2 读取失败 · 3 内部错误 · 4 引用不存在
                 """);
     }
 
@@ -247,5 +316,7 @@ public final class Main {
         ContextKind kind;
         String mustKeep;
         String tokenizer = "o200k_base";
+        Path archivePath;
+        String ref;
     }
 }
