@@ -14,3 +14,6 @@ benchmarks/data/
 # 不入库：它是"当时的测量"，入库就会过期，而 README 引用的是跑出来的数字。
 # CI 每次都会重跑这张矩阵当门禁。
 benchmarks/budget-matrix.json
+
+# 保真评测的测量结果同样是当时的测量，脚本与结论在 README 里
+benchmarks/fidelity-report.json

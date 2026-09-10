@@ -50,6 +50,11 @@ jobs:
           assert s['underfilled'] == 0, "有 %d 个用例几乎没把预算用上" % s['underfilled']
           PY
 
+      # 保真评测：关键信息召回 + **保真证书**（输出里不许出现原文没有的内容）。
+      # 不需要模型、不需要网络、几秒跑完——这也是它敢放进 CI 的原因。
+      - name: Verify fidelity (needle recall and no fabricated content)
+        run: python3 benchmarks/fidelity.py
+
       - name: Protected content must survive at any budget
         run: |
           mkdir -p /tmp/gate

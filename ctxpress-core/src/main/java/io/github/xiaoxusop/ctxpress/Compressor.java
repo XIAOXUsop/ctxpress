@@ -1,6 +1,5 @@
 package io.github.xiaoxusop.ctxpress;
 
-import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -154,22 +153,27 @@ public interface Compressor {
             tailKept++;
         }
 
-        // 第五轮：均匀采样填补中段。
+        // 第五轮：在中段均匀铺开**连续块**，而不是均匀撒孤立点。
+        //
         // 少了这一步会出现荒唐结果：预算给到 60000、内容 68547，却因为头尾是固定条数
         // 而被压到 3000——只超一点预算却付了极大的信息代价。
-        List<Integer> leftover = new ArrayList<>();
-        for (int i = 0; i < n; i++) {
-            if (!kept[i]) {
-                leftover.add(i);
-            }
-        }
-        if (!leftover.isEmpty()) {
-            int m = leftover.size();
-            for (int target = m; target >= 1; target = target > 1 ? Math.max(1, target / 2) : 0) {
-                boolean any = false;
-                for (int k = 0; k < target; k++) {
-                    int position = (int) ((long) k * m / target);
-                    int index = leftover.get(Math.min(position, m - 1));
+        //
+        // 为什么不撒孤立点：一个孤立点夹在两段省略区之间要多付一个省略标记，
+        // 而标记实测约 7 token、一行普通日志才 11 token——标记开销接近内容本身。
+        // 于是同样预算下散点能覆盖的位置远少于等量的连续块。保真评测量到过这个差距：
+        // 3000 行日志给 8000 预算，散点方案的未受保护关键信息召回**低于最朴素的均匀行采样**。
+        // 对日志而言连续块也更可读——能看到采样点附近的事件序列，而不是一串互不相干的孤行。
+        //
+        // 以等距的种子为中心逐轮向外加宽：每一轮块变宽但块数不变，
+        // 所以边际成本只有条目本身，不再重复付标记钱。
+        final int seeds = Math.min(n, 32);
+        for (int width = 1; width <= n; width <<= 1) {
+            boolean any = false;
+            for (int k = 0; k < seeds; k++) {
+                int center = (int) ((long) k * n / seeds);
+                int lo = Math.max(0, center - width + 1);
+                int hi = Math.min(n - 1, center + width - 1);
+                for (int index = lo; index <= hi; index++) {
                     if (kept[index]) {
                         continue;
                     }
@@ -181,9 +185,9 @@ public interface Compressor {
                     kept[index] = true;
                     any = true;
                 }
-                if (!any) {
-                    break;   // 这一密度一个都塞不进，再加密也没用
-                }
+            }
+            if (!any) {
+                break;   // 一个都塞不进了，再放宽也没用
             }
         }
         return kept;
