@@ -34,7 +34,7 @@ public final class TextCompressor implements Compressor {
     }
 
     @Override
-    public PressResult compress(String content, PressPolicy policy) {
+    public PressResult compress(String content, PressPolicy policy, String archiveRef) {
         int originalTokens = TokenEstimator.estimate(content);
         List<String> actions = new ArrayList<>();
 
@@ -82,14 +82,19 @@ public final class TextCompressor implements Compressor {
                 policy.headLines(), policy.tailLines(), policy.maxTokens());
 
         boolean dropped = kept.size() < deduped.size();
-        String rebuilt = dropped ? String.join(" ", kept) + " …[省略 " + (deduped.size() - kept.size()) + " 句]"
-                : String.join(" ", kept);
+        int omitted = deduped.size() - kept.size();
+        String rebuilt = String.join(" ", kept);
         if (dropped) {
-            actions.add("OMITTED_SENTENCES=" + (deduped.size() - kept.size()));
+            rebuilt += archiveRef == null
+                    ? " …[省略 " + omitted + " 句]"
+                    : " …[省略 " + omitted + " 句；原文可经 ctxpress 归档 " + archiveRef + " 取回]";
+            actions.add("OMITTED_SENTENCES=" + omitted);
         }
 
         int compressedTokens = TokenEstimator.estimate(rebuilt);
+        // 只有真的丢过句子才给出归档引用：没压缩还为它占一份归档，是白占容量
         return new PressResult(rebuilt, new PressReport(ContextKind.TEXT, originalTokens, compressedTokens,
-                TokenEstimator.reductionPercent(originalTokens, compressedTokens), protectedSegments, actions));
+                TokenEstimator.reductionPercent(originalTokens, compressedTokens), protectedSegments, actions),
+                dropped ? archiveRef : null);
     }
 }

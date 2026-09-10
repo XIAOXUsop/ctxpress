@@ -1,5 +1,4 @@
 target/
-.demo/
 .idea/
 *.iml
 *.ipr
@@ -7,3 +6,6 @@ target/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# 基准数据由 benchmarks/generate.py 生成
+benchmarks/data/

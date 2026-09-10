@@ -29,7 +29,7 @@ public final class LogCompressor implements Compressor {
     }
 
     @Override
-    public PressResult compress(String content, PressPolicy policy) {
+    public PressResult compress(String content, PressPolicy policy, String archiveRef) {
         int originalTokens = TokenEstimator.estimate(content);
         List<String> actions = new ArrayList<>();
 
@@ -66,10 +66,11 @@ public final class LogCompressor implements Compressor {
         List<String> kept = selectWithinBudget(folded, required,
                 policy.headLines(), policy.tailLines(), policy.maxTokens());
 
-        String rebuilt = rebuild(folded, kept, actions);
+        String rebuilt = rebuild(folded, kept, actions, archiveRef);
         int compressedTokens = TokenEstimator.estimate(rebuilt);
         return new PressResult(rebuilt, new PressReport(ContextKind.LOG, originalTokens, compressedTokens,
-                TokenEstimator.reductionPercent(originalTokens, compressedTokens), protectedSegments, actions));
+                TokenEstimator.reductionPercent(originalTokens, compressedTokens), protectedSegments, actions),
+                archiveRef);
     }
 
     /** 折叠**连续**重复行：只折叠相邻的，避免把不同时间点的同类事件混为一谈 */
@@ -93,8 +94,8 @@ public final class LogCompressor implements Compressor {
         return result;
     }
 
-    /** 按原始顺序重建，并在被丢弃的区段插入省略标记（让模型知道"这里有东西被省略了"） */
-    private String rebuild(List<String> all, List<String> kept, List<String> actions) {
+    /** 按原始顺序重建，并在被丢弃的区段插入省略标记（让模型知道"这里省略了什么、怎么取回"） */
+    private String rebuild(List<String> all, List<String> kept, List<String> actions, String archiveRef) {
         if (kept.size() == all.size()) {
             return String.join("\n", all);
         }
@@ -106,7 +107,7 @@ public final class LogCompressor implements Compressor {
             int idx = keptCopy.indexOf(line);
             if (idx >= 0) {
                 if (dropped > 0) {
-                    sb.append("... [省略 ").append(dropped).append(" 行] ...\n");
+                    sb.append(omissionMarker(dropped, archiveRef)).append('\n');
                     actions.add("OMITTED_LINES=" + dropped);
                     dropped = 0;
                 }
@@ -117,9 +118,20 @@ public final class LogCompressor implements Compressor {
             }
         }
         if (dropped > 0) {
-            sb.append("... [省略 ").append(dropped).append(" 行] ...\n");
+            sb.append(omissionMarker(dropped, archiveRef)).append('\n');
             actions.add("OMITTED_LINES=" + dropped);
         }
         return sb.toString().stripTrailing();
+    }
+
+    /**
+     * 省略标记。带归档引用时同时给出取回入口——
+     * 只标注"省略了 N 行"而不说"怎么拿回来"，等于让模型明知有缺失却无从补救。
+     */
+    static String omissionMarker(int dropped, String archiveRef) {
+        if (archiveRef == null) {
+            return "... [省略 " + dropped + " 行] ...";
+        }
+        return "... [省略 " + dropped + " 行；原文可经 ctxpress 归档 " + archiveRef + " 取回] ...";
     }
 }

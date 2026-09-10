@@ -19,8 +19,19 @@ public interface Compressor {
 
     ContextKind kind();
 
-    /** 执行压缩。实现方负责按 {@link PressPolicy#maxTokens()} 控制规模。 */
-    PressResult compress(String content, PressPolicy policy);
+    /**
+     * 执行压缩。实现方负责按 {@link PressPolicy#maxTokens()} 控制规模。
+     *
+     * @param archiveRef 归档引用（可为 null）。非 null 时实现方必须把它嵌进省略标记里，
+     *                   使读到压缩内容的模型知道"这里省略了东西，以及怎么取回"——
+     *                   这正是压缩可逆的关键：模型得先知道入口存在，才可能去要
+     */
+    PressResult compress(String content, PressPolicy policy, String archiveRef);
+
+    /** 不启用归档时压缩（归档引用是可选的，故提供此重载） */
+    default PressResult compress(String content, PressPolicy policy) {
+        return compress(content, policy, null);
+    }
 
     /**
      * 公共骨架：给定"必须保留的片段"与"可裁剪的片段"，在预算内组装结果。
@@ -68,6 +79,34 @@ public interface Compressor {
             used[i] = true;
             budget -= cost;
             tailKept++;
+        }
+
+        // 第四轮：预算还有富余就用**均匀采样**把中段补回来。
+        // 少了这一步会出现荒唐结果：预算给到 60000，内容 68547，却因为头尾是固定条数
+        // 而被压到 3000（丢掉 95%）——只超一点预算却付了极大的信息代价。
+        List<Integer> leftover = new ArrayList<>();
+        for (int i = 0; i < lines.size(); i++) {
+            if (!used[i]) {
+                leftover.add(i);
+            }
+        }
+        if (!leftover.isEmpty() && budget > 0) {
+            long totalCost = 0;
+            for (int i : leftover) {
+                totalCost += TokenEstimator.estimate(lines.get(i));
+            }
+            int average = (int) Math.max(1, totalCost / leftover.size());
+            int affordable = Math.min(leftover.size(), budget / average);
+            if (affordable > 0) {
+                // 均匀取点（整数运算 + 单次除法，保持确定性）
+                for (int k = 0; k < affordable; k++) {
+                    int position = (int) ((long) k * leftover.size() / affordable);
+                    int index = leftover.get(Math.min(position, leftover.size() - 1));
+                    if (!used[index]) {
+                        used[index] = true;
+                    }
+                }
+            }
         }
 
         for (int i = 0; i < lines.size(); i++) {

@@ -83,14 +83,29 @@ class ContextPressTest {
     void crlfLineEndingsDoNotBreakDetectionOrCompression() {
         // 真实缺陷回归：Windows 采集的日志是 CRLF，而 Java 正则的 `.` 不匹配 \r，
         // 导致 ^\d{4}-\d{2}-\d{2}.* 这类按行判定全部失配，体裁被判成 TEXT。
-        String log = IntStream.range(0, 300)
-                .mapToObj(i -> "2026-09-11 10:00:00 INFO 行 " + i)
+        String log = IntStream.range(0, 3000)
+                .mapToObj(i -> "2026-09-11 10:00:00 INFO 行 " + i + " 内容各不相同")
                 .collect(Collectors.joining("\r\n"));
 
         assertEquals(ContextKind.LOG, ContextKind.detect(log), "CRLF 日志应仍被判为 LOG");
 
-        PressResult result = press.press(log);
+        // 预算必须小于内容体积，否则按契约本来就不该压缩
+        PressResult result = ContextPress.with(PressPolicy.builder().maxTokens(500).build()).press(log);
         assertTrue(result.report().effective(), "CRLF 日志同样应能压缩：" + result.report().summary());
+    }
+
+    /** 最早没有这条契约时，一份 8528 token 的内容在 20000 预算下照样被压——内容放得下却付了信息损失的代价 */
+    @Test
+    void contentThatAlreadyFitsTheBudgetIsLeftUntouched() {
+        String content = IntStream.range(0, 50)
+                .mapToObj(i -> "2026-09-11 10:00:00 INFO 行 " + i)
+                .collect(Collectors.joining("\n"));
+
+        PressResult result = ContextPress.with(PressPolicy.builder().maxTokens(10_000).build()).press(content);
+
+        assertEquals(content, result.content(), "放得下就不该动它");
+        assertFalse(result.report().effective());
+        assertFalse(result.reversible(), "没压缩就不该占归档");
     }
 
     @Test
