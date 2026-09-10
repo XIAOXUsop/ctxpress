@@ -209,7 +209,7 @@ java -jar ctxpress-cli/target/ctxpress.jar retrieve \
 
 选项：`--max-tokens N` · `--kind JSON|LOG|TEXT` · `--must-keep REGEX` · `--head N` · `--tail N`
 · `--tokenizer o200k_base|cl100k_base|r50k_base|p50k_base|heuristic`
-退出码：`0` 成功 · `1` 用法错误 · `2` 读取失败 · `3` 内部错误 —— 可直接用于 CI。
+退出码：`0` 成功 · `1` 用法错误 · `2` 读取失败 · `3` 内部错误 · `4` 引用不存在 —— 可直接用于 CI。
 
 token 默认按 `o200k_base` 真实词表计，报告里会标注实际用的是哪个词表——
 不标的话，"这个数字是按什么算的"根本无从判断。
