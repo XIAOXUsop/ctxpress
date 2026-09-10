@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build & Test (JDK ${{ matrix.java }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        java: [ '21' ]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK ${{ matrix.java }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ matrix.java }}
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Build and test
+        run: ./mvnw -B verify
+
+      - name: Smoke-test the CLI on a realistic log
+        run: |
+          mkdir -p /tmp/demo
+          # 生成一份含重复、故障行与金额的日志，验证端到端可用性
+          python3 - <<'PY'
+          import random
+          random.seed(42)
+          lines = []
+          for i in range(3000):
+              if i % 7 == 0:
+                  lines.append(f"2026-09-11 10:{i//60%60:02d}:{i%60:02d} WARN  retry {i%9} for tx AML-2026-{i:05d}")
+              elif i % 500 == 0:
+                  lines.append(f"2026-09-11 10:{i//60%60:02d}:{i%60:02d} ERROR Caused by java.sql.SQLException: pool exhausted")
+              else:
+                  lines.append(f"2026-09-11 10:{i//60%60:02d}:{i%60:02d} INFO  processed record {i} amount {random.uniform(100,99999):.2f} CNY")
+          open('/tmp/demo/big.log', 'w', encoding='utf-8').write('\n'.join(lines))
+          PY
+
+          java -jar ctxpress-cli/target/ctxpress.jar analyze /tmp/demo/big.log
+          java -jar ctxpress-cli/target/ctxpress.jar compress --max-tokens 800 /tmp/demo/big.log > /tmp/demo/small.log
+
+          # 门禁：必须真的压下来，且故障行必须保留
+          python3 - <<'PY'
+          import io
+          orig = io.open('/tmp/demo/big.log', encoding='utf-8').read()
+          comp = io.open('/tmp/demo/small.log', encoding='utf-8').read()
+          ratio = 1 - len(comp) / len(orig)
+          print(f"reduction = {ratio:.1%}")
+          assert ratio > 0.90, f"压缩率不足: {ratio:.1%}"
+          assert "Caused by" in comp, "故障行被压掉了"
+          PY

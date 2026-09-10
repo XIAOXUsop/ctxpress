@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>io.github.xiaoxusop</groupId>
+        <artifactId>ctxpress-parent</artifactId>
+        <version>0.1.0</version>
+    </parent>
+
+    <artifactId>ctxpress-core</artifactId>
+    <name>ctxpress-core</name>
+    <description>压缩核心：体裁识别 + 三种确定性压缩器 + 关键信息保护 + 可审计报告</description>
+
+    <dependencies>
+        <!-- JSON 结构感知压缩需要真正的 JSON 解析器；这是核心唯一的外部依赖 -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>${jackson.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>
