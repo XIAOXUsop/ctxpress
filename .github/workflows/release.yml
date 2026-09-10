@@ -1,0 +1,33 @@
+name: Release
+
+# 打 tag 即发布：构建产物自动挂到 GitHub Release。
+# 手工上传容易漏、容易版本对不上，而这恰恰是使用者拿到的第一个东西。
+on:
+  push:
+    tags: [ 'v*' ]
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Build
+        run: ./mvnw -B package
+
+      - name: Publish release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ctxpress-cli/target/ctxpress.jar
+            ctxpress/ctxpress-core/target/ctxpress-core-*.jar
+          generate_release_notes: true

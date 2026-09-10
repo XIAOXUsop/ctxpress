@@ -92,6 +92,16 @@ PROTECTION_DOWNGRADED_TO_CRITICAL_ONLY=4000/4000
 
 ## 快速开始
 
+### 方式一：直接下载（无需构建）
+
+```bash
+# 可执行 jar，下载即可用
+curl -LO https://github.com/XIAOXUsop/ctxpress/releases/latest/download/ctxpress.jar
+java -jar ctxpress.jar analyze --max-tokens 8000 app.log
+```
+
+### 方式二：从源码构建
+
 ```bash
 ./mvnw package
 
