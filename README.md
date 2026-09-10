@@ -222,14 +222,14 @@ token 默认按 `o200k_base` 真实词表计，报告里会标注实际用的是
 <dependency>
     <groupId>io.github.xiaoxusop</groupId>
     <artifactId>ctxpress-core</artifactId>
-    <version>0.3.0</version>
+    <version>0.3.1</version>
 </dependency>
 
 <!-- 可选：接真实 BPE 词表，让 token 预算变成可计费口径 -->
 <dependency>
     <groupId>io.github.xiaoxusop</groupId>
     <artifactId>ctxpress-tokenizer-jtokkit</artifactId>
-    <version>0.3.0</version>
+    <version>0.3.1</version>
 </dependency>
 ```
 

@@ -1,5 +1,9 @@
 package io.github.xiaoxusop.ctxpress.tokenizer.jtokkit;
 
+import io.github.xiaoxusop.ctxpress.ContextPress;
+import io.github.xiaoxusop.ctxpress.PressPolicy;
+import io.github.xiaoxusop.ctxpress.PressReport;
+import io.github.xiaoxusop.ctxpress.PressResult;
 import io.github.xiaoxusop.ctxpress.TokenEstimator;
 import org.junit.jupiter.api.Test;
 
@@ -84,5 +88,49 @@ class JtokkitTokenCounterTest {
     @Test
     void specialTokenLookingTextIsCountedNotRejected() {
         assertTrue(counter.count("log line containing <|endoftext|> literally") > 0);
+    }
+
+    /**
+     * 预算契约在真实词表下同样成立。
+     *
+     * <p>这条单列出来，是因为它曾在一个**组合**上失效：受理用的"逐条成本之和"
+     * 之所以是整体估算的上界，靠的是 {@code ceil} 的次可加性——那是启发式计数器的性质，
+     * BPE 词表没有。于是换上真实词表后，输出仍可能超出千分之几，
+     * 而 30 多项单测全绿（它们跑的都是启发式口径）。
+     *
+     * <p>端到端实跑才暴露：98028 token 的内容、3000 预算，输出 3014。
+     * 现在 assemble 会对账并收紧预算重选，收到装下为止。
+     */
+    @Test
+    void budgetContractHoldsUnderTheRealVocabulary() {
+        JtokkitTokenCounter real = JtokkitTokenCounter.ofDefaults();
+        java.util.List<String> corpus = java.util.List.of(
+                java.util.stream.IntStream.range(0, 3000)
+                        .mapToObj(i -> ("2026-09-11 10:%02d:%02d INFO  order %d processed, "
+                                + "amount %d CNY, customer C-%06d").formatted(
+                                i / 60 % 60, i % 60, i, 1000 + i % 9999, i % 99999))
+                        .collect(java.util.stream.Collectors.joining("\n")),
+                "{\"rows\":[" + java.util.stream.IntStream.range(0, 500)
+                        .mapToObj(i -> "{\"id\":%d,\"path\":\"src/main/java/Service%d.java\"}".formatted(i, i))
+                        .collect(java.util.stream.Collectors.joining(",")) + "]}",
+                java.util.stream.IntStream.range(0, 300)
+                        .mapToObj(i -> "The screening engine processed batch %d.".formatted(i))
+                        .collect(java.util.stream.Collectors.joining(" ")));
+
+        java.util.List<String> violations = new java.util.ArrayList<>();
+        for (String content : corpus) {
+            for (int budget : new int[]{2000, 3000, 8000, 16000, 32000}) {
+                PressPolicy policy = PressPolicy.builder().maxTokens(budget).tokenCounter(real).build();
+                PressResult result = ContextPress.with(policy).press(content);
+                PressReport report = result.report();
+                if (report.compressedTokens() > budget && !report.budgetUnsatisfiable()) {
+                    violations.add("预算 %d：输出 %d，超出 %d 却未声明"
+                            .formatted(budget, report.compressedTokens(),
+                                    report.compressedTokens() - budget));
+                }
+            }
+        }
+        assertTrue(violations.isEmpty(), "真实词表下预算契约被违反：\n  "
+                + String.join("\n  ", violations));
     }
 }

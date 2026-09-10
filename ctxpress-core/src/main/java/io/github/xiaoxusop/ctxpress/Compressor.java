@@ -77,12 +77,17 @@ public interface Compressor {
      */
     default boolean[] selectWithinBudget(List<String> items, boolean[] required, PressPolicy policy,
                                          int reserved, int markerCost) {
+        return selectWithinBudget(items, required, policy, policy.maxTokens(), reserved, markerCost);
+    }
+
+    /** 与上同，但用显式给出的预算——{@link #assemble} 对账失败时要收紧预算重选 */
+    default boolean[] selectWithinBudget(List<String> items, boolean[] required, PressPolicy policy,
+                                         int maxTokens, int reserved, int markerCost) {
         int n = items.size();
         boolean[] kept = new boolean[n];
         if (n == 0) {
             return kept;
         }
-        int maxTokens = policy.maxTokens();
         int head = policy.headLines();
         int tail = policy.tailLines();
         TokenCounter counter = policy.tokenCounter();
@@ -202,14 +207,41 @@ public interface Compressor {
      * 此时如实上报 {@link Assembly#unsatisfiable()}，把决策交回调用方，
      * **既不静默丢弃受保护内容，也不静默超标**。
      */
+    /**
+     * 对账不收敛时最多收紧几轮预算。逐条成本之和是整体估算的上界这一点，
+     * 对启发式计数器可证（ceil 次可加），对 BPE 词表只是近似——实测真实词表下
+     * 仍可能超出千分之几，收紧一两轮即可收住。
+     */
+    int RECONCILE_ROUNDS = 4;
+
     default Assembly assemble(List<String> items, boolean[] required, PressPolicy policy,
                               int reserved, int markerCost, Renderer renderer) {
+        int maxTokens = policy.maxTokens();
+        TokenCounter counter = policy.tokenCounter();
         boolean[] kept = selectWithinBudget(items, required, policy, reserved, markerCost);
         String rendered = renderer.render(kept);
-        int maxTokens = policy.maxTokens();
-        int cost = policy.tokenCounter().count(rendered);
-        return cost <= maxTokens
-                ? new Assembly(rendered, kept, false, 0)
-                : new Assembly(rendered, kept, true, cost - maxTokens);
+        int cost = counter.count(rendered);
+        if (cost <= maxTokens) {
+            return new Assembly(rendered, kept, false, 0);
+        }
+
+        // 逐条之和不再是整体估算的上界时（换真实词表就会这样），
+        // 按超出量收紧预算重选——保留得越少，省略段越少、标记开销越小，逐步收住。
+        int effective = maxTokens;
+        for (int round = 0; round < RECONCILE_ROUNDS; round++) {
+            int next = maxTokens - (cost - maxTokens);
+            if (next >= effective || next < 1) {
+                break;
+            }
+            effective = next;
+            kept = selectWithinBudget(items, required, policy, effective, reserved, markerCost);
+            rendered = renderer.render(kept);
+            cost = counter.count(rendered);
+            if (cost <= maxTokens) {
+                return new Assembly(rendered, kept, false, 0);
+            }
+        }
+        // 收紧也收不住：只剩受保护内容本来就装不下这一种情况了。如实上报，不静默丢弃。
+        return new Assembly(rendered, kept, true, cost - maxTokens);
     }
 }
