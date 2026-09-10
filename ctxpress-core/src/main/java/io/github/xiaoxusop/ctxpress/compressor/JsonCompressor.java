@@ -13,6 +13,7 @@ import io.github.xiaoxusop.ctxpress.ContextKind;
 import io.github.xiaoxusop.ctxpress.PressPolicy;
 import io.github.xiaoxusop.ctxpress.PressReport;
 import io.github.xiaoxusop.ctxpress.PressResult;
+import io.github.xiaoxusop.ctxpress.TokenCounter;
 import io.github.xiaoxusop.ctxpress.TokenEstimator;
 
 import java.util.ArrayList;
@@ -74,7 +75,8 @@ public final class JsonCompressor implements Compressor {
 
     @Override
     public PressResult compress(String content, PressPolicy policy, String archiveRef) {
-        int originalTokens = TokenEstimator.estimate(content);
+        TokenCounter counter = policy.tokenCounter();
+        int originalTokens = counter.count(content);
 
         JsonNode root;
         try {
@@ -94,7 +96,7 @@ public final class JsonCompressor implements Compressor {
         // 只输出 132 token——而它去掉缩进后是 77494 token，明明装得下，
         // 却把数组里 99.8% 的元素丢掉了。
         String minified = root.toString();
-        int minifiedTokens = TokenEstimator.estimate(minified);
+        int minifiedTokens = counter.count(minified);
         if (minifiedTokens <= policy.maxTokens()) {
             return new PressResult(minified, new PressReport(ContextKind.JSON,
                     originalTokens, minifiedTokens,
@@ -111,7 +113,7 @@ public final class JsonCompressor implements Compressor {
         // 归档引用本身也占 token，先从预算里扣掉。
         // 早先是"先按预算检查、检查完再把 _ctxpress_archive 塞进对象"——
         // 塞进去的那一刻就超出了预算。
-        int reserved = archiveRef == null ? 0 : archiveFieldCost();
+        int reserved = archiveRef == null ? 0 : archiveFieldCost(counter);
         int budget = Math.max(1, policy.maxTokens() - reserved);
 
         int[] probeCounters = new int[1];
@@ -133,7 +135,7 @@ public final class JsonCompressor implements Compressor {
         }
 
         String rendered = compressed.toString();
-        int compressedTokens = TokenEstimator.estimate(rendered);
+        int compressedTokens = counter.count(rendered);
         int over = Math.max(0, compressedTokens - policy.maxTokens());
         if (over > 0) {
             actions.add("NOTHING_LEFT_TO_TRIM_EXCEPT_PROTECTED_VALUES");
@@ -191,8 +193,8 @@ public final class JsonCompressor implements Compressor {
     }
 
     /** 归档字段写进内容时要额外占用的 token（ref 恒为 {@code ORIG-} + 16 位十六进制） */
-    private static int archiveFieldCost() {
-        return TokenEstimator.estimate(",\"_ctxpress_archive\":\"ORIG-0123456789abcdef\"");
+    private static int archiveFieldCost(TokenCounter counter) {
+        return counter.count(",\"_ctxpress_archive\":\"ORIG-0123456789abcdef\"");
     }
 
     /**
@@ -251,7 +253,7 @@ public final class JsonCompressor implements Compressor {
     private int costAt(JsonNode root, PressPolicy policy, int limit, int[] counters, boolean[] flags) {
         counters[0] = 0;
         flags[0] = false;
-        return TokenEstimator.estimate(shrink(root, policy, limit, counters, flags).toString());
+        return policy.tokenCounter().count(shrink(root, policy, limit, counters, flags).toString());
     }
 
     /** 文档里最长的数组有多长——数组采样上限的搜索上界 */

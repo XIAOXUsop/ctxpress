@@ -6,6 +6,7 @@ import io.github.xiaoxusop.ctxpress.ContextKind;
 import io.github.xiaoxusop.ctxpress.PressPolicy;
 import io.github.xiaoxusop.ctxpress.PressReport;
 import io.github.xiaoxusop.ctxpress.PressResult;
+import io.github.xiaoxusop.ctxpress.TokenCounter;
 import io.github.xiaoxusop.ctxpress.TokenEstimator;
 
 import java.util.ArrayList;
@@ -78,7 +79,8 @@ public final class TextCompressor implements Compressor {
 
     @Override
     public PressResult compress(String content, PressPolicy policy, String archiveRef) {
-        int originalTokens = TokenEstimator.estimate(content);
+        TokenCounter counter = policy.tokenCounter();
+        int originalTokens = counter.count(content);
         List<String> actions = new ArrayList<>();
 
         List<String> sentences = splitSentences(content);
@@ -130,9 +132,9 @@ public final class TextCompressor implements Compressor {
 
         // 文本体裁的渲染只在末尾追加**一个**省略标记，与区段数无关，
         // 所以按固定开销预留，而不是按区段计。
-        int markerCost = TokenEstimator.estimate(omissionMarker(1, archiveRef)) + 1;
-        Assembly assembly = assemble(deduped, required, policy.headLines(), policy.tailLines(),
-                policy.maxTokens(), markerCost, 0, kept -> render(deduped, kept, archiveRef));
+        int markerCost = counter.count(omissionMarker(1, archiveRef)) + 1;
+        Assembly assembly = assemble(deduped, required, policy, markerCost, 0,
+                kept -> render(deduped, kept, archiveRef));
 
         int omitted = 0;
         for (boolean keep : assembly.kept()) {
@@ -148,7 +150,7 @@ public final class TextCompressor implements Compressor {
         }
 
         String rebuilt = assembly.content();
-        int compressedTokens = TokenEstimator.estimate(rebuilt);
+        int compressedTokens = counter.count(rebuilt);
         // 只有真的丢过句子才给出归档引用：没压缩还为它占一份归档，是白占容量
         return new PressResult(rebuilt, new PressReport(ContextKind.TEXT, originalTokens, compressedTokens,
                 TokenEstimator.reductionPercent(originalTokens, compressedTokens), protectedSegments,

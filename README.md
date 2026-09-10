@@ -33,8 +33,10 @@
 - **"仅去空白"不是逐字节无损。** 它只去缩进换行，但 Jackson 会归一化数值字面量
   （`1.00` → `1.0`），也会还原 Unicode 转义。**值等价，字节不等价**——所以报告里写的是
   `MINIFIED_ONLY`，不是 `LOSSLESS`。
-- **预算的计量口径是启发式估算**（CJK 码点 1 token、其余 4 字符 1 token），
-  不是任何一家模型的实际 BPE。它对 JSON / 代码**偏乐观**，见「已知限制」。
+- **预算的计量口径是词表相关的。** 命令行默认用 `o200k_base` 真实词表；
+  作为库引用 `ctxpress-core` 时默认是启发式估算（CJK 1 token/字、其余 4 字符 1 token），
+  它对日志/JSON/代码**偏乐观**（实测同一份日志低估 **37%**）。
+  要真实计数就引 `ctxpress-tokenizer-jtokkit`，或自行实现 `TokenCounter`。
 
 ## 实测：压缩量由预算决定，不是一个固定数字
 
@@ -44,13 +46,19 @@
 
 | 你给的预算 | 压缩后 | 变化 |
 |---:|---:|---:|
-| 2,000 | 1,853 | −97.3% |
-| 8,000 | 7,548 | −89.0% |
-| 20,000 | 18,946 | −72.4% |
-| 60,000 | 57,198 | −16.6% |
-| 100,000 | 68,571 | **0.0%** |
+| 8,000 | 7,942 | −92.7% |
+| 20,000 | 19,947 | −81.8% |
+| 60,000 | 59,977 | −45.2% |
+| 150,000 | 109,398 | **0.0%** |
 
 **每一行都 ≤ 它对应的预算**，这是上一节那条契约的字面含义。
+（token 按 `o200k_base` 真实词表计——同一份日志用启发式估算只有 68,571，
+也就是**低估 37%**。差异这么大是因为日志里时间戳与标点密集，
+真实约 2.5 字符/token，而不是"4 字符 1 token"。）
+
+再往下压会撞到**受保护内容构成的下界**：这份日志有 60 行 ERROR，
+给 2,000 预算时它们本身就占 2,257 token，此时报告直接给出
+`预算未满足=+257`，而不是把故障行悄悄丢掉。
 
 **关键性质是最后一行**：内容已经放得下时，ctxpress 不做任何改动。
 压缩只在必要时发生，且**只丢预算逼你丢的那部分**——不会因为"反正要压"就多丢。
@@ -150,7 +158,11 @@ java -jar ctxpress-cli/target/ctxpress.jar compress --must-keep 'TRACE-[0-9A-F]+
 ```
 
 选项：`--max-tokens N` · `--kind JSON|LOG|TEXT` · `--must-keep REGEX` · `--head N` · `--tail N`
+· `--tokenizer o200k_base|cl100k_base|r50k_base|p50k_base|heuristic`
 退出码：`0` 成功 · `1` 用法错误 · `2` 读取失败 · `3` 内部错误 —— 可直接用于 CI。
+
+token 默认按 `o200k_base` 真实词表计，报告里会标注实际用的是哪个词表——
+不标的话，"这个数字是按什么算的"根本无从判断。
 
 输出**只含 LF**（不随平台变化），因为"确定性"包括跨平台字节一致。
 
@@ -160,7 +172,14 @@ java -jar ctxpress-cli/target/ctxpress.jar compress --must-keep 'TRACE-[0-9A-F]+
 <dependency>
     <groupId>io.github.xiaoxusop</groupId>
     <artifactId>ctxpress-core</artifactId>
-    <version>0.2.0</version>
+    <version>0.3.0</version>
+</dependency>
+
+<!-- 可选：接真实 BPE 词表，让 token 预算变成可计费口径 -->
+<dependency>
+    <groupId>io.github.xiaoxusop</groupId>
+    <artifactId>ctxpress-tokenizer-jtokkit</artifactId>
+    <version>0.3.0</version>
 </dependency>
 ```
 
@@ -190,9 +209,12 @@ headroom 用不了。
 - **没有准确性评测。** headroom 用 GSM8K / SQuAD / BFCL 证明压缩不损失下游精度；
   ctxpress 只证明了"结构自洽 + 引用保全 + 可取回 + 预算守约"，
   **没有证明下游任务准确率不变**。这是当前最大的缺口。
-- **预算的计量是启发式估算，不是可计费 token。** CJK 码点按 1 token、其余按 4 字符 1 token。
-  对 JSON / 代码这类标点密集的文本，真实 BPE 约 3.2–3.7 字符/token，**估计值偏乐观**。
-  接真实 tokenizer 是下一步。
+- **核心模块默认的 token 计数是启发式估算，不是可计费 token。** CJK 码点按 1 token、
+  其余按 4 字符 1 token；实测同一份 3000 行日志它给 68,571 而 `o200k_base` 给 109,398，
+  **低估 37%**。CLI 默认已换成真实词表；把 `ctxpress-core` 当库用时，
+  引 `ctxpress-tokenizer-jtokkit`（约 3.2MB，自带 BPE 词表）。
+- **fat jar 约 5.6MB。** 其中约 3.2MB 是 BPE 词表。想要更小就自建，
+  或只用 `ctxpress-core`（约 35KB + Jackson）。
 - **受保护内容是预算的下界。** 一份每行都含 ERROR 的日志在那部分内容装进预算之前，
   任何预算都满足不了——此时报告会给出 `overBudgetBy` 而不是硬压。
   调高 `maxProtectedRatio` 可以放宽保护范围。
@@ -208,7 +230,7 @@ headroom 用不了。
 ## 测试
 
 ```bash
-./mvnw test      # 64 项，全部离线
+./mvnw test      # 71 项，全部离线
 ```
 
 覆盖的四条不变量比功能本身更重要：

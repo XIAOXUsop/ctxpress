@@ -101,7 +101,7 @@ public final class ContextPress {
         }
         Compressor compressor = compressors.get(kind);
         if (compressor == null) {
-            return PressResult.unchanged(content, kind, TokenEstimator.estimate(content));
+            return PressResult.unchanged(content, kind, policy.tokenCounter().count(content));
         }
         String normalized = normalize(content);
 
@@ -109,7 +109,7 @@ public final class ContextPress {
         // 这条判断是基准测试逼出来的：早先版本无论预算多大都按压缩器的结构默认值裁剪，
         // 于是一份 8528 token 的内容在 20000 的预算下照样被压到 515 —— 内容明明放得下，
         // 却付了信息损失的代价。「能装下就别动」是压缩器最不该违背的契约。
-        int tokens = TokenEstimator.estimate(normalized);
+        int tokens = policy.tokenCounter().count(normalized);
         if (tokens <= policy.maxTokens()) {
             return PressResult.unchanged(normalized, kind, tokens);
         }

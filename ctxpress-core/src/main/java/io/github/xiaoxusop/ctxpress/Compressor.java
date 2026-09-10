@@ -76,16 +76,20 @@ public interface Compressor {
      * @param reserved  与区段数无关的固定开销，先行扣除（例如文本体裁至多只有一个省略标记）
      * @param markerCost 单个省略标记的成本；0 表示该体裁的标记开销已由 {@code reserved} 覆盖
      */
-    default boolean[] selectWithinBudget(List<String> items, boolean[] required, int head, int tail,
-                                         int maxTokens, int reserved, int markerCost) {
+    default boolean[] selectWithinBudget(List<String> items, boolean[] required, PressPolicy policy,
+                                         int reserved, int markerCost) {
         int n = items.size();
         boolean[] kept = new boolean[n];
         if (n == 0) {
             return kept;
         }
+        int maxTokens = policy.maxTokens();
+        int head = policy.headLines();
+        int tail = policy.tailLines();
+        TokenCounter counter = policy.tokenCounter();
         int[] cost = new int[n];
         for (int i = 0; i < n; i++) {
-            cost[i] = TokenEstimator.estimate(items.get(i)) + 1;
+            cost[i] = counter.count(items.get(i)) + 1;
         }
 
         long renderCost = reserved;
@@ -194,11 +198,12 @@ public interface Compressor {
      * 此时如实上报 {@link Assembly#unsatisfiable()}，把决策交回调用方，
      * **既不静默丢弃受保护内容，也不静默超标**。
      */
-    default Assembly assemble(List<String> items, boolean[] required, int head, int tail,
-                              int maxTokens, int reserved, int markerCost, Renderer renderer) {
-        boolean[] kept = selectWithinBudget(items, required, head, tail, maxTokens, reserved, markerCost);
+    default Assembly assemble(List<String> items, boolean[] required, PressPolicy policy,
+                              int reserved, int markerCost, Renderer renderer) {
+        boolean[] kept = selectWithinBudget(items, required, policy, reserved, markerCost);
         String rendered = renderer.render(kept);
-        int cost = TokenEstimator.estimate(rendered);
+        int maxTokens = policy.maxTokens();
+        int cost = policy.tokenCounter().count(rendered);
         return cost <= maxTokens
                 ? new Assembly(rendered, kept, false, 0)
                 : new Assembly(rendered, kept, true, cost - maxTokens);

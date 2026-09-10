@@ -6,7 +6,7 @@
 
     <groupId>io.github.xiaoxusop</groupId>
     <artifactId>ctxpress-parent</artifactId>
-    <version>0.2.0</version>
+    <version>0.3.0</version>
     <packaging>pom</packaging>
 
     <name>ctxpress</name>
@@ -29,6 +29,7 @@
     <modules>
         <module>ctxpress-core</module>
         <module>ctxpress-cli</module>
+        <module>ctxpress-tokenizer-jtokkit</module>
     </modules>
 
     <properties>

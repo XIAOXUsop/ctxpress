@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>io.github.xiaoxusop</groupId>
+        <artifactId>ctxpress-parent</artifactId>
+        <version>0.3.0</version>
+    </parent>
+
+    <artifactId>ctxpress-tokenizer-jtokkit</artifactId>
+    <name>ctxpress-tokenizer-jtokkit</name>
+    <description>真实 BPE 词表的 token 计数：接上它之后，token 预算才是「可计费 token」意义上的预算</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>io.github.xiaoxusop</groupId>
+            <artifactId>ctxpress-core</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <!--
+          jtokkit：MIT，纯 Java，无传递依赖，自带 BPE 词表（cl100k_base / o200k_base / r50k_base 等）。
+          代价是 jar 有约 3.2MB——所以它单独成模块：不需要精确计数的使用者只依赖 ctxpress-core，
+          依然保持「运行时依赖只有 Jackson」。
+        -->
+        <dependency>
+            <groupId>com.knuddels</groupId>
+            <artifactId>jtokkit</artifactId>
+            <version>1.1.0</version>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

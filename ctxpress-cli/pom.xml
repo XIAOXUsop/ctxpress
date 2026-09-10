@@ -7,7 +7,7 @@
     <parent>
         <groupId>io.github.xiaoxusop</groupId>
         <artifactId>ctxpress-parent</artifactId>
-        <version>0.2.0</version>
+        <version>0.3.0</version>
     </parent>
 
     <artifactId>ctxpress-cli</artifactId>
@@ -15,6 +15,17 @@
     <description>命令行：直接在管道里压缩日志/JSON/文本，无需写代码</description>
 
     <dependencies>
+        <!--
+          CLI 默认带真实词表：命令行用户拿到的是一个可执行 jar，
+          没有"再加一个依赖"的机会，而"预算 8000"如果按乐观估算算，实际会撑爆窗口。
+          代价是 fat jar 从约 2.4MB 涨到约 5.6MB（jtokkit 自带 BPE 词表）。
+          想退回启发式估算，用 tokenizer 选项选 heuristic。
+        -->
+        <dependency>
+            <groupId>io.github.xiaoxusop</groupId>
+            <artifactId>ctxpress-tokenizer-jtokkit</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         <dependency>
             <groupId>io.github.xiaoxusop</groupId>
             <artifactId>ctxpress-core</artifactId>

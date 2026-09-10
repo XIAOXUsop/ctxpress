@@ -6,6 +6,7 @@ import io.github.xiaoxusop.ctxpress.ContextKind;
 import io.github.xiaoxusop.ctxpress.PressPolicy;
 import io.github.xiaoxusop.ctxpress.PressReport;
 import io.github.xiaoxusop.ctxpress.PressResult;
+import io.github.xiaoxusop.ctxpress.TokenCounter;
 import io.github.xiaoxusop.ctxpress.TokenEstimator;
 
 import java.util.ArrayList;
@@ -27,7 +28,8 @@ public final class LogCompressor implements Compressor {
 
     @Override
     public PressResult compress(String content, PressPolicy policy, String archiveRef) {
-        int originalTokens = TokenEstimator.estimate(content);
+        TokenCounter counter = policy.tokenCounter();
+        int originalTokens = counter.count(content);
         List<String> actions = new ArrayList<>();
 
         List<String> raw = List.of(content.split("\n", -1));
@@ -61,9 +63,9 @@ public final class LogCompressor implements Compressor {
 
         // 省略标记的成本按"每个区段一个"计入预算。带归档引用时标记会长得多
         // （引用本身 + 取回说明），这正是开启可逆后更容易撑爆预算的原因，必须如实计入。
-        int markerCost = TokenEstimator.estimate(omissionMarker(1, archiveRef)) + 1;
-        Assembly assembly = assemble(folded, required, policy.headLines(), policy.tailLines(),
-                policy.maxTokens(), 0, markerCost, kept -> render(folded, kept, archiveRef));
+        int markerCost = counter.count(omissionMarker(1, archiveRef)) + 1;
+        Assembly assembly = assemble(folded, required, policy, 0, markerCost,
+                kept -> render(folded, kept, archiveRef));
 
         int gaps = 0;
         int omitted = 0;
@@ -85,7 +87,7 @@ public final class LogCompressor implements Compressor {
         }
 
         String rebuilt = assembly.content();
-        int compressedTokens = TokenEstimator.estimate(rebuilt);
+        int compressedTokens = counter.count(rebuilt);
         return new PressResult(rebuilt, new PressReport(ContextKind.LOG, originalTokens, compressedTokens,
                 TokenEstimator.reductionPercent(originalTokens, compressedTokens), protectedSegments,
                 actions, assembly.overBudgetBy()),

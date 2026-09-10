@@ -4,6 +4,7 @@ import io.github.xiaoxusop.ctxpress.ContextKind;
 import io.github.xiaoxusop.ctxpress.ContextPress;
 import io.github.xiaoxusop.ctxpress.PressPolicy;
 import io.github.xiaoxusop.ctxpress.PressResult;
+import io.github.xiaoxusop.ctxpress.tokenizer.jtokkit.JtokkitTokenCounter;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -31,6 +32,9 @@ public final class Main {
     private static final int EXIT_USAGE = 1;
     private static final int EXIT_READ_FAILED = 2;
     private static final int EXIT_INTERNAL = 3;
+
+    /** 退回核心模块的启发式估算（CJK 1 token/字，其余 4 字符/token） */
+    private static final String HEURISTIC_TOKENIZER = "heuristic";
 
     private Main() {
     }
@@ -103,6 +107,14 @@ public final class Main {
                     options.mustKeep = value;
                     i++;
                 }
+                case "--tokenizer" -> {
+                    String value = nextArg(args, i + 1, err, arg);
+                    if (value == null) {
+                        return EXIT_USAGE;
+                    }
+                    options.tokenizer = value;
+                    i++;
+                }
                 case "--head" -> {
                     Integer value = intArg(args, i + 1, err, arg);
                     if (value == null) {
@@ -147,6 +159,11 @@ public final class Main {
             if (options.mustKeep != null) {
                 builder.mustKeep(options.mustKeep);
             }
+            // 默认走真实词表：命令行用户拿到的是可执行 jar，没有"再加一个依赖"的机会，
+            // 而按乐观估算算出来的"预算 8000"实际会撑爆窗口。
+            if (!HEURISTIC_TOKENIZER.equals(options.tokenizer)) {
+                builder.tokenCounter(JtokkitTokenCounter.of(options.tokenizer));
+            }
             press = ContextPress.with(builder.build());
         } catch (RuntimeException e) {
             // 参数越界由策略层抛 IllegalArgumentException，这里转成用法错误而不是内部错误
@@ -155,9 +172,10 @@ public final class Main {
         }
 
         PressResult result = options.kind == null ? press.press(content) : press.press(content, options.kind);
+        String report = result.report().summary() + ", tokenizer=" + options.tokenizer;
 
         if ("analyze".equals(command)) {
-            out.print(result.report().summary());
+            out.print(report);
             out.print('\n');
             return 0;
         }
@@ -167,7 +185,7 @@ public final class Main {
         // 与"确定性 / 可复现"的承诺冲突（实测 CRLF 归一化后仍会多出 1 个 CRLF）。
         out.print(result.content());
         out.print('\n');
-        err.print(result.report().summary());
+        err.print(report);
         err.print('\n');
         return 0;
     }
@@ -214,6 +232,8 @@ public final class Main {
                   --must-keep REGEX  追加保护正则；命中内容不参与裁剪
                   --head N           保留头部行数（默认 40）
                   --tail N           保留尾部行数（默认 20）
+                  --tokenizer T      o200k_base（默认）| cl100k_base | r50k_base | p50k_base | heuristic
+                                     token 以此为计数口径；报告里会标注实际用词表
 
                 不指定文件时从 stdin 读取。全离线，不调用任何模型。
                 退出码：0 成功 · 1 用法错误 · 2 读取失败 · 3 内部错误
@@ -226,5 +246,6 @@ public final class Main {
         int tailLines = 20;
         ContextKind kind;
         String mustKeep;
+        String tokenizer = "o200k_base";
     }
 }

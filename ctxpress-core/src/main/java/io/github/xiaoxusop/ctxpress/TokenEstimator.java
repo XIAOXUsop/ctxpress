@@ -13,11 +13,28 @@ package io.github.xiaoxusop.ctxpress;
  * <p>估算规则：CJK 码点按 1 token，其余按 4 字符 1 token 向上取整。
  * 偏向保守（宁可高估），因为高估只会让压缩更积极，低估才会撑爆窗口。
  */
-public final class TokenEstimator {
+public final class TokenEstimator implements TokenCounter {
 
     private static final double CHARS_PER_TOKEN = 4.0;
 
+    /** 默认计数器。按接口用，不按实现用——换词表时只需改 {@link PressPolicy.Builder#tokenCounter} */
+    private static final TokenCounter DEFAULT = new TokenEstimator();
+
     private TokenEstimator() {
+    }
+
+    public static TokenCounter defaultCounter() {
+        return DEFAULT;
+    }
+
+    @Override
+    public int count(String text) {
+        return estimate(text);
+    }
+
+    @Override
+    public String name() {
+        return "heuristic";
     }
 
     public static int estimate(String text) {

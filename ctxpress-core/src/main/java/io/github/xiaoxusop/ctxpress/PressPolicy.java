@@ -39,6 +39,7 @@ public final class PressPolicy {
     private final int tailLines;
     private final int maxArrayItems;
     private final double maxProtectedRatio;
+    private final TokenCounter tokenCounter;
 
     private PressPolicy(Builder builder) {
         this.maxTokens = builder.maxTokens;
@@ -47,6 +48,15 @@ public final class PressPolicy {
         this.tailLines = builder.tailLines;
         this.maxArrayItems = builder.maxArrayItems;
         this.maxProtectedRatio = builder.maxProtectedRatio;
+        this.tokenCounter = builder.tokenCounter;
+    }
+
+    /**
+     * 本次压缩使用的 token 计数器。预算、报告里的 token 数都由它算出来——
+     * 换一个计数器，同一份内容的数字会变，但"输出 ≤ 预算"这条契约不变。
+     */
+    public TokenCounter tokenCounter() {
+        return tokenCounter;
     }
 
     /** 保护占比上限：超过它说明规则失去区分度，应降级为只保护故障线索 */
@@ -114,6 +124,17 @@ public final class PressPolicy {
         private int tailLines = 20;
         private int maxArrayItems = 8;
         private double maxProtectedRatio = 0.6;
+        private TokenCounter tokenCounter = TokenEstimator.defaultCounter();
+
+        /**
+         * 换用别的 token 计数器（例如真实 BPE 词表）。
+         *
+         * <p>不指定时用启发式估算：CJK 码点 1 token、其余 4 字符 1 token。
+         */
+        public Builder tokenCounter(TokenCounter tokenCounter) {
+            this.tokenCounter = Objects.requireNonNull(tokenCounter, "tokenCounter");
+            return this;
+        }
 
         /**
          * 保护占比上限（0..1，默认 0.6）。
