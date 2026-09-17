@@ -258,21 +258,21 @@ token 默认按 `o200k_base` 真实词表计，报告里会标注实际用的是
 > <dependency>
 >     <groupId>io.github.xiaoxusop</groupId>
 >     <artifactId>ctxpress-core</artifactId>
->     <version>0.4.0</version>
+>     <version>0.4.1</version>
 > </dependency>
 >
 > <!-- 可选：接真实 BPE 词表，让 token 预算变成可计费口径 -->
 > <dependency>
 >     <groupId>io.github.xiaoxusop</groupId>
 >     <artifactId>ctxpress-tokenizer-jtokkit</artifactId>
->     <version>0.4.0</version>
+>     <version>0.4.1</version>
 > </dependency>
 > ```
 
 **从 Release 安装**（在 Maven Central 就绪之前，这是唯一能真正装上的方式）：
 
 ```bash
-V=0.4.0
+V=0.4.1
 curl -LO https://github.com/XIAOXUsop/ctxpress/releases/download/v$V/ctxpress-core-$V.jar
 curl -LO https://github.com/XIAOXUsop/ctxpress/releases/download/v$V/ctxpress-tokenizer-jtokkit-$V.jar
 

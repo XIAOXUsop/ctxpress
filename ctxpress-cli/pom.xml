@@ -7,7 +7,7 @@
     <parent>
         <groupId>io.github.xiaoxusop</groupId>
         <artifactId>ctxpress-parent</artifactId>
-        <version>0.4.0</version>
+        <version>0.4.1</version>
     </parent>
 
     <artifactId>ctxpress-cli</artifactId>
@@ -55,6 +55,15 @@
                         <configuration>
                             <createDependencyReducedPom>false</createDependencyReducedPom>
                             <transformers>
+                                <!--
+                                  追加而不是覆盖 META-INF/LICENSE：本项目自己的许可证与依赖带来的
+                                  许可证会撞在同一个路径上，而 shade 默认保留先遇到的那一份——
+                                  静默丢掉另一个。实测确认过：加了自己的 LICENSE 之后，
+                                  原本那份 11358 字节的 Apache 许可证就从 jar 里消失了。
+                                -->
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.AppendingTransformer">
+                                    <resource>META-INF/LICENSE</resource>
+                                </transformer>
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
                                     <mainClass>io.github.xiaoxusop.ctxpress.cli.Main</mainClass>
                                 </transformer>

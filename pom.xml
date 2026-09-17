@@ -6,7 +6,7 @@
 
     <groupId>io.github.xiaoxusop</groupId>
     <artifactId>ctxpress-parent</artifactId>
-    <version>0.4.0</version>
+    <version>0.4.1</version>
     <packaging>pom</packaging>
 
     <name>ctxpress</name>
@@ -90,6 +90,41 @@
               提到的两个版本号都不是根因（根因是本地 mvn 太旧），排查成本远高于在这里早说一句。
               README 里的 `./mvnw package` 路径不受影响，wrapper 自带 3.9.x。
             -->
+            <!--
+              把 LICENSE 打进每个模块 jar 的 META-INF。
+              Maven 默认不这么做，于是发布的库产物里没有许可证文本——
+              一个可自由再分发的 jar 必须自带它的许可条件。
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-resources-plugin</artifactId>
+                <version>3.3.1</version>
+                <executions>
+                    <execution>
+                        <id>copy-license-into-jar</id>
+                        <phase>process-resources</phase>
+                        <goals>
+                            <goal>copy-resources</goal>
+                        </goals>
+                        <configuration>
+                            <outputDirectory>${project.build.outputDirectory}/META-INF</outputDirectory>
+                            <resources>
+                                <resource>
+                                    <!--
+                                      多模块项目：LICENSE 在仓库根，而每个模块的
+                                      ${project.basedir} 是模块自己那一层——直接用它会找不到文件，
+                                      而且**不会报错**（copy-resources 对空目录是静默通过）。
+                                    -->
+                                    <directory>${project.basedir}/..</directory>
+                                    <includes>
+                                        <include>LICENSE</include>
+                                    </includes>
+                                </resource>
+                            </resources>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-enforcer-plugin</artifactId>
