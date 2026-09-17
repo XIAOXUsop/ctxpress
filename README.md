@@ -290,8 +290,24 @@ mvn install:install-file -Dfile=ctxpress-tokenizer-jtokkit-$V.jar \
 - 装的是**本机仓库**，别人 clone 你的项目后同样要跑一遍上面的命令。
   在 CI 里用的话，把这两条 `install-file` 放进构建脚本的前置步骤。
 
-**为什么还没上 Central**：需要 Sonatype 的 namespace 校验与 GPG 签名，
-当前没有对应凭据。这件事没做完之前，本文档不会给出"直接写坐标即可"的暗示。
+**为什么还没上 Central——以及还差什么**
+
+发布所需的配置已经全部就位，缺的只有凭据：
+
+| 项 | 状态 |
+|---|---|
+| groupId `io.github.xiaoxusop` | 已确认（与 GitHub 账号对应，namespace 校验走这条路） |
+| POM 元数据 | 已补 `licenses` / `scm` / `developers`，`mvn -Prelease -Dgpg.skip=true package` 会产出 `-sources.jar` 与 `-javadoc.jar` |
+| 签名 | `maven-gpg-plugin` 已挂在 `release` profile 的 `verify` 阶段 |
+| 上传 | `central-publishing-maven-plugin`，`autoPublish=false`（先停在 Portal 让人确认再发） |
+| 工作流 | `.github/workflows/publish-central.yml`，**只能手动触发**且要求手打确认词 |
+
+差的是三个 secrets：`MAVEN_CENTRAL_USERNAME`、`MAVEN_CENTRAL_PASSWORD`（Sonatype 用户令牌）
+与 `GPG_PRIVATE_KEY` / `MAVEN_GPG_PASSPHRASE`。配好之后
+`.github/workflows/publish-central.yml` 跑一次即可，之后本文档的 `<dependency>` 才算数。
+
+> 发布流程刻意**不挂在 tag 上自动跑**：Central 的版本发布后不能撤下，
+> 自动发布的代价是"打错一次 tag 就永久留痕"。
 
 ## 与 headroom 的关系（以及我不假装的事）
 

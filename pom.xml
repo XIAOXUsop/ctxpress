@@ -26,6 +26,22 @@
         </license>
     </licenses>
 
+    <developers>
+        <developer>
+            <id>XIAOXUsop</id>
+            <name>XIAOXUsop</name>
+            <url>https://github.com/XIAOXUsop</url>
+        </developer>
+    </developers>
+
+    <!-- Central 要求 SCM 指向可访问的仓库；tag 与 POM 版本一致才能通过校验 -->
+    <scm>
+        <connection>scm:git:https://github.com/XIAOXUsop/ctxpress.git</connection>
+        <developerConnection>scm:git:ssh://git@github.com/XIAOXUsop/ctxpress.git</developerConnection>
+        <url>https://github.com/XIAOXUsop/ctxpress</url>
+        <tag>v${project.version}</tag>
+    </scm>
+
     <modules>
         <module>ctxpress-core</module>
         <module>ctxpress-cli</module>
@@ -99,4 +115,78 @@
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <!--
+          发布到 Maven Central 用的 profile。**默认不参与构建**：
+          签名需要 GPG 私钥，源码 / Javadoc jar 也会拖慢日常迭代。
+
+          用法：mvn -Prelease -DskipTests deploy
+          凭据来自 settings.xml 里 id=central 的 server（Sonatype 用户令牌）。
+        -->
+        <profile>
+            <id>release</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-source-plugin</artifactId>
+                        <version>3.3.1</version>
+                        <executions>
+                            <execution>
+                                <id>attach-sources</id>
+                                <goals>
+                                    <goal>jar-no-fork</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-javadoc-plugin</artifactId>
+                        <version>3.11.2</version>
+                        <configuration>
+                            <!-- 注释里有中文与代码片段，doclint 的严格模式会让发布卡在文档格式上 -->
+                            <doclint>none</doclint>
+                            <quiet>true</quiet>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <id>attach-javadocs</id>
+                                <goals>
+                                    <goal>jar</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <version>3.2.7</version>
+                        <executions>
+                            <execution>
+                                <id>sign-artifacts</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>sign</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.sonatype.central</groupId>
+                        <artifactId>central-publishing-maven-plugin</artifactId>
+                        <version>0.9.0</version>
+                        <extensions>true</extensions>
+                        <configuration>
+                            <!-- 与 settings.xml 里 <server><id>central</id> 对应 -->
+                            <publishingServerId>central</publishingServerId>
+                            <!-- 先传到 Portal 停在待发布状态，确认无误再点发布 -->
+                            <autoPublish>false</autoPublish>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>

@@ -1,0 +1,58 @@
+name: Publish to Maven Central
+
+# **只手动触发，而且要求手打确认词。**
+#
+# 发布到 Central 与发 GitHub Release 不是一回事：版本一旦发布就**不能撤下**
+# （Sonatype 只在极少情况下接受删除请求），所有下游都可能已经拉到它。
+# 所以它不该挂在 push/tag 上自动跑——那意味着任何一次打错 tag 都会永久留痕。
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: '输入 publish 确认发布到 Maven Central（版本发布后不可撤下）'
+        required: true
+        default: ''
+
+jobs:
+  publish:
+    name: Publish ${{ github.ref_name }}
+    runs-on: ubuntu-latest
+    # 仓库里没有凭据时这一步会直接失败，而不是偷偷跳过——那正是应该发生的
+    if: ${{ inputs.confirm == 'publish' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # GPG 私钥与口令由 setup-java 一并接入：
+      # 前者用于签名产物，后者通过 MAVEN_GPG_PASSPHRASE 传给 maven-gpg-plugin
+      - name: Set up JDK 21 with Central credentials
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+          server-id: central
+          server-username: MAVEN_CENTRAL_USERNAME
+          server-password: MAVEN_CENTRAL_PASSWORD
+          gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
+          gpg-passphrase: MAVEN_GPG_PASSPHRASE
+
+      # 版本号必须与 tag 一致，否则 Central 会拒收（"版本与 SCM tag 不符"）
+      - name: Verify version matches the tag
+        run: |
+          VERSION=$(./mvnw -B -q -DforceStdout help:evaluate -Dexpression=project.version)
+          TAG="${GITHUB_REF_NAME#v}"
+          echo "POM 版本=$VERSION  tag=$GITHUB_REF_NAME"
+          [ "$VERSION" = "$TAG" ] || { echo "::error::POM 版本($VERSION)与 tag($TAG)不一致，Central 会拒收"; exit 1; }
+
+      - name: Publish
+        env:
+          MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
+        run: ./mvnw -B -Prelease -DskipTests deploy
+
+      - name: What happens next
+        run: |
+          echo "产物已上传到 Central Portal，处于**待发布**状态（autoPublish=false）。"
+          echo "到 https://central.sonatype.com/ 检查后手动点 Publish；"
+          echo "在那之前它不会出现在 search.maven.org 上。"
