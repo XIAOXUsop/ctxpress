@@ -5,6 +5,7 @@ import io.github.xiaoxusop.ctxpress.Compressor;
 import io.github.xiaoxusop.ctxpress.ContextKind;
 import io.github.xiaoxusop.ctxpress.PressPolicy;
 import io.github.xiaoxusop.ctxpress.PressReport;
+import io.github.xiaoxusop.ctxpress.TokenCounterInfo;
 import io.github.xiaoxusop.ctxpress.PressResult;
 import io.github.xiaoxusop.ctxpress.TokenCounter;
 import io.github.xiaoxusop.ctxpress.TokenEstimator;
@@ -90,7 +91,7 @@ public final class LogCompressor implements Compressor {
         int compressedTokens = counter.count(rebuilt);
         return new PressResult(rebuilt, new PressReport(ContextKind.LOG, originalTokens, compressedTokens,
                 TokenEstimator.reductionPercent(originalTokens, compressedTokens), protectedSegments,
-                actions, assembly.overBudgetBy()),
+                actions, assembly.overBudgetBy(), TokenCounterInfo.of(counter)),
                 gaps > 0 ? archiveRef : null);
     }
 

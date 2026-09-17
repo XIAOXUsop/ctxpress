@@ -99,4 +99,10 @@ public final class JtokkitTokenCounter implements TokenCounter {
     public String name() {
         return vocabulary.name().toLowerCase(Locale.ROOT);
     }
+
+    /** 真实词表口径——这正是它与启发式估算的区别所在，必须如实声明 */
+    @Override
+    public boolean exact() {
+        return true;
+    }
 }

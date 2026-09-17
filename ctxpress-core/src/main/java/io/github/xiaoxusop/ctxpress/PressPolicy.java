@@ -112,12 +112,42 @@ public final class PressPolicy {
         return new Builder();
     }
 
-    /** 默认策略：8000 token 上限 */
+    /**
+     * 默认策略：8000 token 上限。
+     *
+     * <p><b>口径提醒</b>：这条便捷路径用的是**启发式估算**（见
+     * {@link TokenEstimator}），不是可计费 token。要把预算当硬约束用，请走
+     * {@link #hardBudget(int, TokenCounter)} 显式指定计数器——两种口径下
+     * 同一份内容的数字能差 60%。
+     */
     public static PressPolicy defaults() {
         return builder().build();
     }
 
+    /**
+     * 把预算当**硬约束**时的构建入口：计数器必须显式给出。
+     *
+     * <p>存在这条入口的原因很具体：{@code maxTokens(8000)} 里的 8000 到底是
+     * 8000 个启发式估算单位，还是 8000 个可计费 token，只有调用方知道。
+     * 沿用默认估算器时，"塞进 8000" 实际可能在模型侧花掉 11000——
+     * 而这件事在程序里**不会以任何形式报错**，只会在账单或上下文溢出时暴露。
+     *
+     * <p>显式写一次计数器，就把"我知道这里用的是哪种口径"变成了代码事实。
+     *
+     * @param maxTokens 预算上限
+     * @param counter   实际用于计数的实现，例如
+     *                  {@code new JtokkitTokenCounter(Vocabulary.O200K_BASE)}
+     *                  或 {@code TokenEstimator.withSafetyMargin(TokenEstimator.BENCHMARK_ESTIMATE_GAP)}
+     */
+    public static Builder hardBudget(int maxTokens, TokenCounter counter) {
+        Objects.requireNonNull(counter, "预算为硬约束时必须显式指定 token 计数器：否则 8000 这个数字的口径无从得知");
+        return builder().tokenCounter(counter).maxTokens(maxTokens);
+    }
+
     public static final class Builder {
+
+        // 注意：不调用 tokenCounter(...) 时用的是启发式估算（偏乐观）。
+        // 预算需要硬约束时请从 PressPolicy.hardBudget(...) 进入。
         private int maxTokens = 8_000;
         private List<Pattern> mustKeep = DEFAULT_MUST_KEEP.stream().map(Pattern::compile).toList();
         private int headLines = 40;

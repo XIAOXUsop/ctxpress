@@ -4,6 +4,8 @@ import io.github.xiaoxusop.ctxpress.ContextPress;
 import io.github.xiaoxusop.ctxpress.PressPolicy;
 import io.github.xiaoxusop.ctxpress.PressReport;
 import io.github.xiaoxusop.ctxpress.PressResult;
+import io.github.xiaoxusop.ctxpress.TokenCounter;
+import io.github.xiaoxusop.ctxpress.TokenCounterInfo;
 import io.github.xiaoxusop.ctxpress.TokenEstimator;
 import org.junit.jupiter.api.Test;
 
@@ -132,5 +134,38 @@ class JtokkitTokenCounterTest {
         }
         assertTrue(violations.isEmpty(), "真实词表下预算契约被违反：\n  "
                 + String.join("\n  ", violations));
+    }
+
+    /**
+     * 真实词表必须**自报**为精确口径。
+     *
+     * <p>这条与 ctxpress-core 里"启发式必须自报为估算"是一对：
+     * 报告里那个 6,000 token 到底能不能塞进模型，取决于这里说不说实话。
+     * 默认实现返回 false（估算），所以"精确"必须由实现方主动声明——
+     * 反过来（默认精确）会让一个估算器不声不响地冒充真实计数。
+     */
+    @Test
+    void declaresItselfAsAnExactVocabularyCounter() {
+        for (JtokkitTokenCounter.Vocabulary vocabulary : JtokkitTokenCounter.Vocabulary.values()) {
+            TokenCounter counter = new JtokkitTokenCounter(vocabulary);
+
+            assertTrue(counter.exact(), vocabulary + " 是真实词表，必须声明为精确口径");
+            assertEquals(vocabulary.name().toLowerCase(java.util.Locale.ROOT), counter.name());
+        }
+    }
+
+    @Test
+    void reportNamesTheVocabularySoTheNumberCannotBeMisread() {
+        PressPolicy policy = PressPolicy.hardBudget(2000, new JtokkitTokenCounter(JtokkitTokenCounter.Vocabulary.O200K_BASE)).build();
+        String content = java.util.stream.IntStream.range(0, 400)
+                .mapToObj(i -> "2026-09-18T03:00:%02d INFO step=%d ok".formatted(i % 60, i))
+                .collect(java.util.stream.Collectors.joining("\n"));
+
+        PressResult result = ContextPress.with(policy).press(content);
+        TokenCounterInfo counter = result.report().counter();
+
+        assertEquals("o200k_base", counter.name());
+        assertTrue(counter.exact());
+        assertTrue(result.report().summary().contains("真实词表口径"), result.report().summary());
     }
 }

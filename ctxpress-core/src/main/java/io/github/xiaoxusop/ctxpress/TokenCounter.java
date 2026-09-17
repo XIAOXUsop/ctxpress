@@ -21,4 +21,15 @@ public interface TokenCounter {
     default String name() {
         return getClass().getSimpleName();
     }
+
+    /**
+     * 这个计数器给的是**真实词表**的结果（true），还是启发式估算（false）。
+     *
+     * <p>默认 false：新增的实现如果不主动声明，就会被当作估算口径写进报告。
+     * 反过来的默认值很危险——一个估算器只要不吭声就会被当成精确计数，
+     * 而"预算 8000 实际花 11000"这种事不会以任何形式报错。
+     */
+    default boolean exact() {
+        return false;
+    }
 }

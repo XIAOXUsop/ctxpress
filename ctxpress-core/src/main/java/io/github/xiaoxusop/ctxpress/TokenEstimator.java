@@ -27,6 +27,56 @@ public final class TokenEstimator implements TokenCounter {
         return DEFAULT;
     }
 
+    /**
+     * 实测倍率：同一份日志本估算器给 <b>68,571</b>，{@code o200k_base} 给 <b>109,398</b>，
+     * 即真实值约为估算值的 {@value #BENCHMARK_ESTIMATE_GAP} 倍（低估约 37%）。
+     *
+     * <p>这个数字来自仓库里 <a href="https://github.com/XIAOXUsop/ctxpress">benchmarks/</a>
+     * 的日志基准，是**当前唯一的实测依据**。改它之前请先重跑基准——
+     * 拍脑袋调小只会让本来就不准的估算更不准。
+     */
+    public static final double BENCHMARK_ESTIMATE_GAP = 109_398.0 / 68_571.0;
+
+    /**
+     * 带安全余量的估算器：把估算值乘上 {@code multiplier}。
+     *
+     * <p>什么时候需要它：估算是**偏乐观**的，按估算算出来刚好卡住预算的内容，
+     * 真实计费很可能是超的。想用估算口径又不想撑爆窗口时，用一个实测出来的倍数
+     * 把估算垫高——但垫高就会多压内容，所以这是**有代价的取舍**，不是免费保险。
+     *
+     * <p>典型用法是 {@code TokenEstimator.withSafetyMargin(TokenEstimator.BENCHMARK_ESTIMATE_GAP)}。
+     * 若你的文本不是标点密集的日志（例如以中文散文为主），这个倍数会明显偏大——
+     * 找一个贴近自己语料的倍数，别直接抄。
+     *
+     * <p>只对启发式口径有意义：真实词表本来就准，再乘一个倍数等于凭空多压内容。
+     */
+    public static TokenCounter withSafetyMargin(double multiplier) {
+        if (!(multiplier > 0) || !Double.isFinite(multiplier)) {
+            throw new IllegalArgumentException("安全余量倍数必须是正有限数：" + multiplier);
+        }
+        return new ScalableTokenEstimator(multiplier);
+    }
+
+    /** 估算值 × 倍数的包装；名字里带上倍数，报告里一眼能看出用的是哪一档 */
+    private static final class ScalableTokenEstimator implements TokenCounter {
+
+        private final double multiplier;
+
+        private ScalableTokenEstimator(double multiplier) {
+            this.multiplier = multiplier;
+        }
+
+        @Override
+        public int count(String text) {
+            return (int) Math.ceil(estimate(text) * multiplier);
+        }
+
+        @Override
+        public String name() {
+            return "heuristic×" + String.format(java.util.Locale.ROOT, "%.2f", multiplier);
+        }
+    }
+
     @Override
     public int count(String text) {
         return estimate(text);

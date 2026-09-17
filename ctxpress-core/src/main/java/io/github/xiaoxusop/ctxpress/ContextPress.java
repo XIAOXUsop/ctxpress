@@ -97,11 +97,12 @@ public final class ContextPress {
     /** 指定体裁压缩（用于调用方已知内容类型的场景） */
     public PressResult press(String content, ContextKind kind) {
         if (content == null || content.isEmpty()) {
-            return PressResult.unchanged(content == null ? "" : content, kind, 0);
+            return PressResult.unchanged(content == null ? "" : content, kind, 0, TokenCounterInfo.of(policy.tokenCounter()));
         }
         Compressor compressor = compressors.get(kind);
         if (compressor == null) {
-            return PressResult.unchanged(content, kind, policy.tokenCounter().count(content));
+            return PressResult.unchanged(content, kind, policy.tokenCounter().count(content),
+                    TokenCounterInfo.of(policy.tokenCounter()));
         }
         // 已经放得下就不动它。
         // 这条判断是基准测试逼出来的：早先版本无论预算多大都按压缩器的结构默认值裁剪，
@@ -112,7 +113,7 @@ public final class ContextPress {
         // 但"放得下"就不该顺手改掉调用方给的字节。
         int originalTokens = policy.tokenCounter().count(content);
         if (originalTokens <= policy.maxTokens()) {
-            return PressResult.unchanged(content, kind, originalTokens);
+            return PressResult.unchanged(content, kind, originalTokens, TokenCounterInfo.of(policy.tokenCounter()));
         }
 
         String normalized = normalize(content);

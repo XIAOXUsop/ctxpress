@@ -5,6 +5,7 @@ import io.github.xiaoxusop.ctxpress.Compressor;
 import io.github.xiaoxusop.ctxpress.ContextKind;
 import io.github.xiaoxusop.ctxpress.PressPolicy;
 import io.github.xiaoxusop.ctxpress.PressReport;
+import io.github.xiaoxusop.ctxpress.TokenCounterInfo;
 import io.github.xiaoxusop.ctxpress.PressResult;
 import io.github.xiaoxusop.ctxpress.TokenCounter;
 import io.github.xiaoxusop.ctxpress.TokenEstimator;
@@ -85,7 +86,7 @@ public final class TextCompressor implements Compressor {
 
         List<String> sentences = splitSentences(content);
         if (sentences.isEmpty()) {
-            return PressResult.unchanged(content, ContextKind.TEXT, originalTokens);
+            return PressResult.unchanged(content, ContextKind.TEXT, originalTokens, TokenCounterInfo.of(counter));
         }
 
         // 句子级去重：RAG 片段之间的大段重叠是 token 浪费的主要来源
@@ -154,7 +155,7 @@ public final class TextCompressor implements Compressor {
         // 只有真的丢过句子才给出归档引用：没压缩还为它占一份归档，是白占容量
         return new PressResult(rebuilt, new PressReport(ContextKind.TEXT, originalTokens, compressedTokens,
                 TokenEstimator.reductionPercent(originalTokens, compressedTokens), protectedSegments,
-                actions, assembly.overBudgetBy()),
+                actions, assembly.overBudgetBy(), TokenCounterInfo.of(counter)),
                 omitted > 0 ? archiveRef : null);
     }
 

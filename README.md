@@ -110,6 +110,8 @@ CI 把这张矩阵当门禁跑（`violated == 0`、`underfilled == 0`）。
 而 Agent 恰恰经常在后续步骤里需要前面被压掉的细节（一个错误码、一个字段值）。
 
 ```java
+// 预算的口径必须写清楚：这里的 2000 是**启发式估算**单位，不是可计费 token。
+// 要当硬约束用，走 hardBudget 显式给计数器（见下「token 口径」）。
 ContextPress press = ContextPress.withArchive(PressPolicy.builder().maxTokens(2000).build());
 
 PressResult result = press.press(toolOutput);
@@ -137,6 +139,36 @@ press.retrieve(result.archiveRef())     // 后续需要时取回原文，逐字�
 ContextArchive archive = FileContextArchive.open(Path.of(".ctxpress/archive.log"));
 ContextPress press = ContextPress.withArchive(Policy.builder().maxTokens(2000).build(), archive);
 ```
+
+### token 口径：估算还是真实词表
+
+同一份内容在两种口径下的数字能差 60%（实测同一份日志：启发式 68,571、`o200k_base` 109,398）。
+所以报告里**永远**写着这次用的是哪一种：
+
+```
+LOG: 68571 -> 6048 tokens (-91.2%), 保护 12 段, 计数口径=heuristic（启发式估算口径，偏乐观）
+LOG: 109398 -> 9612 tokens (-91.2%), 保护 12 段, 计数口径=o200k_base（真实词表口径）
+```
+
+估算偏乐观，意味着"按估算卡住预算"的内容真实计费可能超。要在意这一点时有两种做法：
+
+```java
+// ① 把预算当硬约束：计数器必须显式给出，省不掉
+PressPolicy policy = PressPolicy.hardBudget(8000, new JtokkitTokenCounter(Vocabulary.O200K_BASE)).build();
+
+// ② 继续用轻量的启发式，但按实测倍率垫高（倍数来自 benchmarks/ 的日志基准，别拍脑袋填）
+TokenCounter padded = TokenEstimator.withSafetyMargin(TokenEstimator.BENCHMARK_ESTIMATE_GAP);
+PressPolicy policy2 = PressPolicy.hardBudget(8000, padded).build();
+```
+
+| 计数器 | 报告里的名字 | 口径 | 依赖 |
+|---|---|---|---|
+| `TokenEstimator.defaultCounter()` | `heuristic` | 估算（偏乐观） | 无（核心模块自带） |
+| `TokenEstimator.withSafetyMargin(x)` | `heuristic×1.60` | 估算 × 实测倍率 | 无 |
+| `new JtokkitTokenCounter(Vocabulary.O200K_BASE)` | `o200k_base` | 真实词表 | `ctxpress-tokenizer-jtokkit` |
+
+> 垫高倍率是**有代价的取舍**：估算垫得越高，压缩越激进。若你的文本不是标点密集的日志
+> （例如以中文散文为主），`BENCHMARK_ESTIMATE_GAP` 会明显偏大，请换一个贴近自己语料的值。
 
 > 归档里存的是**调用方给的原文**，不是归一化之后的副本——CRLF 输入经归一化后每行少一个字节，
 > 存副本会让"逐字节取回"名不副实（实测 3000 行日志差 2999 字节）。
@@ -201,7 +233,7 @@ java -jar ctxpress-cli/target/ctxpress.jar compress --must-keep 'TRACE-[0-9A-F]+
 # 可逆：压掉的原文进归档，报告行里给出引用，随时取回（逐字节一致）
 java -jar ctxpress-cli/target/ctxpress.jar compress --max-tokens 2000 \
     --archive .ctxpress/archive.log app.log > small.log
-#   → 报告(stderr)：LOG: 97999 -> 1973 tokens (-98.0%), …, 归档=ORIG-30f2518ba6415194
+#   → 报告(stderr)：LOG: 97999 -> 1973 tokens (-98.0%), …, 计数口径=o200k_base（真实词表口径）, 归档=ORIG-30f2518ba6415194
 
 java -jar ctxpress-cli/target/ctxpress.jar retrieve \
     --archive .ctxpress/archive.log --ref ORIG-30f2518ba6415194 > restored.log
@@ -218,20 +250,48 @@ token 默认按 `o200k_base` 真实词表计，报告里会标注实际用的是
 
 作为库：
 
-```xml
-<dependency>
-    <groupId>io.github.xiaoxusop</groupId>
-    <artifactId>ctxpress-core</artifactId>
-    <version>0.3.1</version>
-</dependency>
+> ⚠️ **尚未发布到 Maven Central。** 下面的坐标只是本项目的 groupId/artifactId，
+> 直接粘进 `pom.xml` 会**解析失败**（`repo1.maven.org/maven2/io/github/xiaoxusop/` 目前是 404）。
+> 想现在就用，走下面「从 Release 安装」的两步。
+>
+> ```xml
+> <dependency>
+>     <groupId>io.github.xiaoxusop</groupId>
+>     <artifactId>ctxpress-core</artifactId>
+>     <version>0.4.0</version>
+> </dependency>
+>
+> <!-- 可选：接真实 BPE 词表，让 token 预算变成可计费口径 -->
+> <dependency>
+>     <groupId>io.github.xiaoxusop</groupId>
+>     <artifactId>ctxpress-tokenizer-jtokkit</artifactId>
+>     <version>0.4.0</version>
+> </dependency>
+> ```
 
-<!-- 可选：接真实 BPE 词表，让 token 预算变成可计费口径 -->
-<dependency>
-    <groupId>io.github.xiaoxusop</groupId>
-    <artifactId>ctxpress-tokenizer-jtokkit</artifactId>
-    <version>0.3.1</version>
-</dependency>
+**从 Release 安装**（在 Maven Central 就绪之前，这是唯一能真正装上的方式）：
+
+```bash
+V=0.4.0
+curl -LO https://github.com/XIAOXUsop/ctxpress/releases/download/v$V/ctxpress-core-$V.jar
+curl -LO https://github.com/XIAOXUsop/ctxpress/releases/download/v$V/ctxpress-tokenizer-jtokkit-$V.jar
+
+mvn install:install-file -Dfile=ctxpress-core-$V.jar \
+  -DgroupId=io.github.xiaoxusop -DartifactId=ctxpress-core -Dversion=$V -Dpackaging=jar
+mvn install:install-file -Dfile=ctxpress-tokenizer-jtokkit-$V.jar \
+  -DgroupId=io.github.xiaoxusop -DartifactId=ctxpress-tokenizer-jtokkit -Dversion=$V -Dpackaging=jar
 ```
+
+装完之后上面的 `<dependency>` 就能解析了。两点已知限制，写在前面省得你踩：
+
+- `mvn install:install-file` 自动生成的 POM **不含依赖声明**，所以宿主工程要自带
+  `ctxpress-core` 所需的 Jackson（`jackson-databind`），以及
+  `ctxpress-tokenizer-jtokkit` 所需的 `jtokkit`。
+- 装的是**本机仓库**，别人 clone 你的项目后同样要跑一遍上面的命令。
+  在 CI 里用的话，把这两条 `install-file` 放进构建脚本的前置步骤。
+
+**为什么还没上 Central**：需要 Sonatype 的 namespace 校验与 GPG 签名，
+当前没有对应凭据。这件事没做完之前，本文档不会给出"直接写坐标即可"的暗示。
 
 ## 与 headroom 的关系（以及我不假装的事）
 
@@ -282,7 +342,7 @@ headroom 用不了。
 ## 测试
 
 ```bash
-./mvnw test      # 84 项，全部离线
+./mvnw test      # 95 项，全部离线（core 72 + tokenizer 10 + cli 13）
 ```
 
 覆盖的四条不变量比功能本身更重要：

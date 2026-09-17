@@ -12,6 +12,7 @@ import io.github.xiaoxusop.ctxpress.Compressor;
 import io.github.xiaoxusop.ctxpress.ContextKind;
 import io.github.xiaoxusop.ctxpress.PressPolicy;
 import io.github.xiaoxusop.ctxpress.PressReport;
+import io.github.xiaoxusop.ctxpress.TokenCounterInfo;
 import io.github.xiaoxusop.ctxpress.PressResult;
 import io.github.xiaoxusop.ctxpress.TokenCounter;
 import io.github.xiaoxusop.ctxpress.TokenEstimator;
@@ -101,7 +102,7 @@ public final class JsonCompressor implements Compressor {
             return new PressResult(minified, new PressReport(ContextKind.JSON,
                     originalTokens, minifiedTokens,
                     TokenEstimator.reductionPercent(originalTokens, minifiedTokens),
-                    0, List.of("MINIFIED_ONLY")), null);
+                    0, List.of("MINIFIED_ONLY"), TokenCounterInfo.of(counter)), null);
         }
 
         // 档位二/三：按预算裁剪。
@@ -142,7 +143,8 @@ public final class JsonCompressor implements Compressor {
         }
         return new PressResult(rendered, new PressReport(ContextKind.JSON, originalTokens, compressedTokens,
                 TokenEstimator.reductionPercent(originalTokens, compressedTokens),
-                protectedCount[0], actions, over), truncated[0] ? archiveRef : null);
+                protectedCount[0], actions, over, TokenCounterInfo.of(counter)),
+                truncated[0] ? archiveRef : null);
     }
 
     /**
@@ -188,8 +190,8 @@ public final class JsonCompressor implements Compressor {
         actions.add(0, "JSON_PARSE_FAILED_FALLBACK_TO_" + result.report().kind());
         return new PressResult(result.content(), new PressReport(result.report().kind(), originalTokens,
                 result.report().compressedTokens(), result.report().reductionPercent(),
-                result.report().protectedSegments(), actions, result.report().overBudgetBy()),
-                result.archiveRef());
+                result.report().protectedSegments(), actions, result.report().overBudgetBy(),
+                result.report().counter()), result.archiveRef());
     }
 
     /** 归档字段写进内容时要额外占用的 token（ref 恒为 {@code ORIG-} + 16 位十六进制） */

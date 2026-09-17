@@ -19,10 +19,10 @@ public record PressResult(String content, PressReport report, String archiveRef)
         this(content, report, null);
     }
 
-    /** 未发生压缩时原样返回的快捷构造 */
-    public static PressResult unchanged(String content, ContextKind kind, int tokens) {
+    /** 未发生压缩时原样返回的快捷构造；计数器必填，否则报告里说不清 token 的口径 */
+    public static PressResult unchanged(String content, ContextKind kind, int tokens, TokenCounterInfo counter) {
         return new PressResult(content,
-                new PressReport(kind, tokens, tokens, 0.0, 0, List.of("NO_OP")), null);
+                new PressReport(kind, tokens, tokens, 0.0, 0, List.of("NO_OP"), counter), null);
     }
 
     /** 是否可用归档取回原文 */
