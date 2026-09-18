@@ -179,7 +179,38 @@ class MainTest {
         Invocation retrieved = invoke("retrieve", "--archive", archive, "--ref", ref);
 
         assertEquals(0, retrieved.code(), retrieved.err());
-        assertEquals(original, retrieved.out().stripTrailing(), "取回的内容必须与原文逐字节相同");
+        /*
+         * **不调 stripTrailing**。
+         *
+         * 这里原先是 `assertEquals(original, retrieved.out().stripTrailing(), "…逐字节相同")`
+         * ——断言信息写着「逐字节」，代码却把尾部空白剥掉再比。于是
+         * `retrieve` 无条件追加的那个换行被完全抹平，bug 一直测不出来；
+         * 更糟的是，原文末尾有多个换行时少写一个也照样通过。
+         */
+        assertEquals(original, retrieved.out(), "取回的内容必须与原文逐字节相同");
+    }
+
+    /**
+     * 原文**以换行结尾**时同样逐字节一致。
+     *
+     * <p>这是真实日志文件的常态（编辑器与日志框架都会写结尾换行），
+     * 而上面那条用例的输入恰好不以换行结尾——两者各覆盖追加与丢失的方向。
+     */
+    @Test
+    void retrieveIsByteFaithfulWhenTheSourceEndsWithANewline(@TempDir java.nio.file.Path dir) {
+        String original = log(2000) + "\n";
+        String archive = dir.resolve("archive.log").toString();
+
+        Invocation compressed = invoke(original.getBytes(StandardCharsets.UTF_8),
+                "compress", "--max-tokens", "200", "--archive", archive);
+        assertEquals(0, compressed.code(), compressed.err());
+
+        java.util.regex.Matcher matcher = ARCHIVE_REF.matcher(compressed.err());
+        assertTrue(matcher.find(), "报告行里应给出归档引用：" + compressed.err());
+
+        Invocation retrieved = invoke("retrieve", "--archive", archive, "--ref", matcher.group(1));
+        assertEquals(0, retrieved.code(), retrieved.err());
+        assertEquals(original, retrieved.out(), "结尾的换行不该被多加一次，也不该被吃掉");
     }
 
     /** 没指定归档时不该冒出引用——那会让调用方以为能取回 */

@@ -247,8 +247,21 @@ public final class Main {
                 err.println("ctxpress: 归档里没有 " + options.ref + "（当前共 " + archive.size() + " 条）");
                 return EXIT_REF_NOT_FOUND;
             }
+            /*
+             * 取回的内容**原样写出，一个字节都不加**。
+             *
+             * 这里曾经无条件 `out.print('\n')`（大约是为了让终端提示符另起一行）。
+             * 代价是取回的文件永远比原文多一个换行——而 README 三处承诺
+             * 「逐字节一致」，归档引用的 ORIG-xxx 本身就是原文内容的 sha256 前缀，
+             * 用户拿它一校验就会发现对不上。
+             *
+             * 这条 bug 之所以长期隐身，是因为测试里写的是
+             * `assertEquals(original, retrieved.out().stripTrailing(), "必须逐字节相同")`
+             * ——**断言信息写着「逐字节」，代码却把尾部空白剥掉再比**，
+             * 正好把多出来的换行抹平。它还顺带掩盖了更糟的情况：
+             * 原文末尾有多个换行时，少写一个也不会被发现。
+             */
             out.print(content.get());
-            out.print('\n');
             return 0;
         } catch (IOException e) {
             err.println("ctxpress: 打开归档失败: " + e.getMessage());
