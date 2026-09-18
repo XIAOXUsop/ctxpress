@@ -53,7 +53,37 @@
         <maven.compiler.release>21</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <junit.version>5.13.4</junit.version>
-        <jackson.version>2.19.0</jackson.version>
+        <!--
+          2.21.5 而不是 2.19.0：2.19.0 命中 5 条 jackson-databind 公告，
+          逐条查过 NVD 的受影响区间后，要求的最高修复版本是 2.21.5：
+
+            CVE-2026-54512  多态类型校验器绕过          修复 2.21.4
+            CVE-2026-54513  数组子类型白名单绕过         修复 2.21.4
+            CVE-2026-54514  InetSocketAddress 触发即时 DNS 解析  修复 2.21.4
+            CVE-2026-54515  逐属性大小写不敏感的反序列化绕过  修复 2.21.5
+            CVE-2026-59888  Record 上的 @JsonIgnore 被绕过      修复 2.21.4
+            （五条都落在 `2.19.0 ≤ v < 2.21.4/2.21.5` 这个分支上）
+
+          ⚠️ **这个依赖此前不在任何告警视野里**，值得说清楚为什么：
+          ctxpress 是多模块工程，`jackson.version` 定义在父 pom、由子模块引用，
+          而 GitHub 的依赖图对 Maven 是静态解析的——它解析不出跨模块的属性，
+          于是在依赖图里记成了 `com.fasterxml.jackson.core:jackson-databind`
+          **不带版本号**。Dependabot 拿不到版本就无法与公告的版本区间比对，
+          所以这个仓库的 Security 页一直是 0 条告警。
+          （实测：ctxpress 8 个坐标里 2 个没版本号；单模块、版本写在同一份 pom 里的
+          mcp-sentinel 是 0/5，而它是唯一拿到过告警的那个仓库。）
+
+          本项目的 `JsonCompressor` 只用 `ObjectMapper` / `JsonNode`，没开多态类型，
+          所以那两条 HIGH 未必可达；但这只是一次补丁级升级，不值得为此赌一把。
+        -->
+        <jackson.version>2.21.5</jackson.version>
+        <!--
+          可复现构建：固定产物里每个条目的时间戳。
+          这个仓库把 jar 发到 GitHub Release，不固定的话同一份源码在不同时刻
+          构建出的字节不同，「下载到的 jar 是不是从这份源码构建的」就无法用哈希回答。
+          实测（加之前）：连续两次 `./mvnw clean package -DskipTests` 的 sha256 不同。
+        -->
+        <project.build.outputTimestamp>2026-09-19T00:00:00Z</project.build.outputTimestamp>
     </properties>
 
     <dependencyManagement>
