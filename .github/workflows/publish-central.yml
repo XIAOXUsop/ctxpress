@@ -20,12 +20,12 @@ jobs:
     # 仓库里没有凭据时这一步会直接失败，而不是偷偷跳过——那正是应该发生的
     if: ${{ inputs.confirm == 'publish' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       # GPG 私钥与口令由 setup-java 一并接入：
       # 前者用于签名产物，后者通过 MAVEN_GPG_PASSPHRASE 传给 maven-gpg-plugin
       - name: Set up JDK 21 with Central credentials
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           java-version: '21'
           distribution: 'temurin'
