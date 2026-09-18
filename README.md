@@ -110,6 +110,9 @@ CI 把这张矩阵当门禁跑（`violated == 0`、`underfilled == 0`）。
 而 Agent 恰恰经常在后续步骤里需要前面被压掉的细节（一个错误码、一个字段值）。
 
 ```java
+import io.github.xiaoxusop.ctxpress.ContextPress;
+import io.github.xiaoxusop.ctxpress.PressPolicy;
+
 // 预算的口径必须写清楚：这里的 2000 是**启发式估算**单位，不是可计费 token。
 // 要当硬约束用，走 hardBudget 显式给计数器（见下「token 口径」）。
 ContextPress press = ContextPress.withArchive(PressPolicy.builder().maxTokens(2000).build());
@@ -258,21 +261,21 @@ token 默认按 `o200k_base` 真实词表计，报告里会标注实际用的是
 > <dependency>
 >     <groupId>io.github.xiaoxusop</groupId>
 >     <artifactId>ctxpress-core</artifactId>
->     <version>0.4.1</version>
+>     <version>0.4.2</version>
 > </dependency>
 >
 > <!-- 可选：接真实 BPE 词表，让 token 预算变成可计费口径 -->
 > <dependency>
 >     <groupId>io.github.xiaoxusop</groupId>
 >     <artifactId>ctxpress-tokenizer-jtokkit</artifactId>
->     <version>0.4.1</version>
+>     <version>0.4.2</version>
 > </dependency>
 > ```
 
 **从 Release 安装**（在 Maven Central 就绪之前，这是唯一能真正装上的方式）：
 
 ```bash
-V=0.4.1
+V=0.4.2
 curl -LO https://github.com/XIAOXUsop/ctxpress/releases/download/v$V/ctxpress-core-$V.jar
 curl -LO https://github.com/XIAOXUsop/ctxpress/releases/download/v$V/ctxpress-tokenizer-jtokkit-$V.jar
 
@@ -282,11 +285,16 @@ mvn install:install-file -Dfile=ctxpress-tokenizer-jtokkit-$V.jar \
   -DgroupId=io.github.xiaoxusop -DartifactId=ctxpress-tokenizer-jtokkit -Dversion=$V -Dpackaging=jar
 ```
 
-装完之后上面的 `<dependency>` 就能解析了。两点已知限制，写在前面省得你踩：
+装完之后上面的 `<dependency>` 就能解析了。
 
-- `mvn install:install-file` 自动生成的 POM **不含依赖声明**，所以宿主工程要自带
-  `ctxpress-core` 所需的 Jackson（`jackson-databind`），以及
-  `ctxpress-tokenizer-jtokkit` 所需的 `jtokkit`。
+- jar 内嵌的 POM 是**自包含**的：构建时 `flatten-maven-plugin` 会把父 POM 的继承与
+  属性（如 `jackson.version`）解析进去，所以宿主工程**不需要**再手动声明
+  Jackson、jtokkit 这类传递依赖。
+  > **0.4.1 及更早的版本在这里是坏的**：那时内嵌的 POM 还带着
+  > `<parent>ctxpress-parent</parent>`，而父 POM 并不随 Release 发布，
+  > 宿主工程会直接报 `Could not find artifact io.github.xiaoxusop:ctxpress-parent:pom:<版本>`
+  > ——也就是说，「从 Release 安装」这条路当时根本走不通。v0.4.2 起修复。
+  > 这一条是照本文档亲手做了一遍才发现的。
 - 装的是**本机仓库**，别人 clone 你的项目后同样要跑一遍上面的命令。
   在 CI 里用的话，把这两条 `install-file` 放进构建脚本的前置步骤。
 

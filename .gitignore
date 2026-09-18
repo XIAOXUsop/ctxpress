@@ -17,3 +17,7 @@ benchmarks/budget-matrix.json
 
 # 保真评测的测量结果同样是当时的测量，脚本与结论在 README 里
 benchmarks/fidelity-report.json
+
+# flatten-maven-plugin 生成的扁平化 POM。构建产物：install 与 deploy 用的是它，
+# 而不是源码里的 pom.xml。不入库——它每次构建都会重新生成。
+.flattened-pom.xml

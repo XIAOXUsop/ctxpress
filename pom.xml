@@ -6,7 +6,7 @@
 
     <groupId>io.github.xiaoxusop</groupId>
     <artifactId>ctxpress-parent</artifactId>
-    <version>0.4.1</version>
+    <version>0.4.2</version>
     <packaging>pom</packaging>
 
     <name>ctxpress</name>
@@ -145,6 +145,49 @@
                                 </requireJavaVersion>
                             </rules>
                         </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <!--
+              让发布出去的 POM 自包含。
+
+              ── 为什么需要它 ──────────────────────────────────────────────
+              子模块的 POM 继承自 ctxpress-parent，`jackson.version` 这类属性也定义在
+              父 POM 里。而 jar 内嵌的 META-INF/maven/**/pom.xml 就是这份**未经解析**
+              的 POM，`mvn install:install-file` 会优先用它——于是使用者照 README
+              从 Release 装完之后，宿主工程解析 ctxpress-core 时会去找
+              ctxpress-parent:pom:0.4.1，找不到就整个构建失败。
+
+              实测（2026-09-18）：照 README 那两步做完，一个最小示例工程报
+              "Could not find artifact io.github.xiaoxusop:ctxpress-parent:pom:0.4.1"。
+              也就是说那条路径当时**根本走不通**，而 README 写着它是唯一能装上的方式。
+
+              flatten 把父 POM 的继承与属性解析进一份自包含的 POM，install / deploy
+              用的就是它。对 Maven Central 同样是必需的：Central 期望的也是自包含 POM。
+            -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>flatten-maven-plugin</artifactId>
+                <version>1.6.0</version>
+                <configuration>
+                    <updatePomFile>true</updatePomFile>
+                    <!-- oss：去掉 parent、解析属性与继承，保留 license / scm / developers -->
+                    <flattenMode>oss</flattenMode>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>flatten</id>
+                        <phase>process-resources</phase>
+                        <goals>
+                            <goal>flatten</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>flatten-clean</id>
+                        <phase>clean</phase>
+                        <goals>
+                            <goal>clean</goal>
+                        </goals>
                     </execution>
                 </executions>
             </plugin>
