@@ -139,7 +139,14 @@ class MainTest {
         assertTrue(result.out().startsWith("LOG: "), result.out());
     }
 
-    /** 一份放得下的内容不该被改动 */
+    /**
+     * 一份放得下的内容不该被改动——**字节层面**。
+     *
+     * <p>原先比的是 {@code result.out().stripTrailing()}，于是压缩路径无条件补的
+     * 那个换行被抹平，「不做任何改动」在字节层面其实不成立。契约里写的是
+     * 「输出不含原文没有的内容：每个字节要么逐字来自输入，要么属于已声明的
+     * 标记文法」——补的那个换行两条都不满足。
+     */
     @Test
     void contentThatFitsIsEmittedUnchanged() {
         String small = log(3);
@@ -147,7 +154,18 @@ class MainTest {
         Invocation result = invoke(small.getBytes(StandardCharsets.UTF_8), "compress", "--max-tokens", "8000");
 
         assertEquals(0, result.code());
-        assertEquals(small, result.out().stripTrailing());
+        assertEquals(small, result.out(), "放得下的内容必须原样输出，不许多也不许少");
+    }
+
+    /** 原文以换行结尾时同样如此——两个方向都要盖住 */
+    @Test
+    void contentThatFitsKeepsItsTrailingNewlineExactly() {
+        String small = log(3) + "\n";
+
+        Invocation result = invoke(small.getBytes(StandardCharsets.UTF_8), "compress", "--max-tokens", "8000");
+
+        assertEquals(0, result.code());
+        assertEquals(small, result.out(), "结尾换行不该被复制成两个");
     }
 
     // ---------- 可逆：命令行也能取回 ----------
