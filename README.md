@@ -224,6 +224,14 @@ java -jar ctxpress.jar analyze --max-tokens 8000 app.log
 > （2026-09-19 从 Release 下载实测：输入 347652 字节、取回 347653）。
 > 修复已在 master（`ef382a4`）、**尚未发布**——现在就要正确行为的话，
 > 请走方式二从源码构建。详见下文「测试」一节第 12 条。
+>
+> ⚠️ **同一个包里还内嵌 jackson-databind 2.19.0，命中 5 条已知依赖告警**
+> （2 HIGH + 3 MEDIUM，含 `PolymorphicTypeValidator` 绕过）。修复在 master
+> （`e7594a0`，升到 2.21.5），同样**尚未发布**。2026-09-19 解压 Release 产物核对过：
+> `META-INF/maven/com.fasterxml.jackson.core/jackson-databind/pom.properties` 里
+> 写的正是 `version=2.19.0`（jackson-core / annotations 同为 2.19.0）。
+> **v0.4.2 落后 master 6 个提交。** 现在 `release.yml` 里加了两道发版闸
+> （依赖告警 + tag 是否落后且动了构建配置），这类"产物落后于 master"不会再静默发出。
 
 ### 方式二：从源码构建
 
@@ -322,6 +330,26 @@ mvn install:install-file -Dfile=ctxpress-tokenizer-jtokkit-$V.jar \
 
 > 发布流程刻意**不挂在 tag 上自动跑**：Central 的版本发布后不能撤下，
 > 自动发布的代价是"打错一次 tag 就永久留痕"。
+
+**发版前的两道闸**（`.github/workflows/release.yml`，打 tag 时跑）
+
+打 tag 会触发构建，但**不是打了就一定发**——`scripts/release_preflight.py` 要先过两道：
+
+| 闸 | 查什么 |
+|---|---|
+| 一 | 仓库里还有 `high`/`critical` 的开放依赖告警 → 拒绝发布 |
+| 二 | 这个 tag 落后默认分支，且落后的提交动过 `pom.xml`/`mvnw`/`gradle` 配置 → 拒绝发布 |
+
+两道都要，是因为**只查一道会漏掉这次真实发生的事**：仓库告警查的是默认分支当前的依赖图，
+而 release 构建的是 tag 指向的那个 commit。v0.4.2 就是落在两道之间——
+它的 jar 里是 jackson 2.19.0，而 master 上早已升到 2.21.5，查仓库告警时看到的是
+**已经修好的 master**。闸二会把这个 tag 落下的 6 个提交逐条列出来，其中就有
+`e7594a0 fix(deps): jackson 2.19.0 → 2.21.5` 和 `ef382a4`（逐字节一致那个修复）。
+干净的是 master，不是那个产物。
+
+另一条同样重要的约束：**查不动不等于通过**。HTTP 403/404（Dependabot 没开或
+`GITHUB_TOKEN` 缺 `security-events: read`）、响应不是数组、级别字段不认识、
+git 历史取不到——一律拒绝发布。这些情况在日志里和"没有告警"长得一模一样。
 
 ## 与 headroom 的关系（以及我不假装的事）
 

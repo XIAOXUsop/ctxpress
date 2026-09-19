@@ -70,3 +70,19 @@ jobs:
           java -jar ctxpress-cli/target/ctxpress.jar compress --max-tokens 200 /tmp/gate/pad.log > /tmp/gate/small.log
           grep -q "AML-9999" /tmp/gate/small.log || { echo "受保护内容被压掉了"; exit 1; }
           grep -q "Caused by" /tmp/gate/small.log || { echo "异常链被压掉了"; exit 1; }
+
+  release-gate-selftest:
+    name: Release Gate Self-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # 发版前那道闸（scripts/release_preflight.py）决定一个 tag 能不能变成 Release，
+      # 它自己不能是没验过的。用例里每一条都对应一次真实事故或一个真实的误读风险，
+      # 尤其是「查不动 != 通过」那几条：HTTP 403、响应不是数组、级别字段不认识、
+      # git 历史取不到——这些在日志里的表现和"没有告警"完全一样。
+      #
+      # 反向验证过：拿掉 `if unknown:`、把 403 放行、拿掉 `if risky:`
+      # 三处守卫分别会让 2 / 1 / 2 条用例变红。
+      - name: Test the release preflight gate
+        run: python3 -m unittest discover -s scripts -p 'test_*.py' -v
