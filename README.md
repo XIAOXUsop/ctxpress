@@ -219,19 +219,20 @@ curl -LO https://github.com/XIAOXUsop/ctxpress/releases/latest/download/ctxpress
 java -jar ctxpress.jar analyze --max-tokens 8000 app.log
 ```
 
-> ⚠️ **Release 上的最新版（v0.4.2）在 `retrieve` 取回时会多写 1 个字节**，
-> 所以下面「可逆」那节里的**逐字节一致**，用这个 jar 是做不到的
-> （2026-09-19 从 Release 下载实测：输入 347652 字节、取回 347653）。
-> 修复已在 master（`ef382a4`）、**尚未发布**——现在就要正确行为的话，
-> 请走方式二从源码构建。详见下文「测试」一节第 12 条。
+> ✅ **v0.4.3 修掉了 v0.4.2 的两处问题**，下载最新版即可：
 >
-> ⚠️ **同一个包里还内嵌 jackson-databind 2.19.0，命中 5 条已知依赖告警**
-> （2 HIGH + 3 MEDIUM，含 `PolymorphicTypeValidator` 绕过）。修复在 master
-> （`e7594a0`，升到 2.21.5），同样**尚未发布**。2026-09-19 解压 Release 产物核对过：
-> `META-INF/maven/com.fasterxml.jackson.core/jackson-databind/pom.properties` 里
-> 写的正是 `version=2.19.0`（jackson-core / annotations 同为 2.19.0）。
-> **v0.4.2 落后 master 6 个提交。** 现在 `release.yml` 里加了两道发版闸
-> （依赖告警 + tag 是否落后且动了构建配置），这类"产物落后于 master"不会再静默发出。
+> | v0.4.2 的问题 | v0.4.3 |
+> |---|---|
+> | `retrieve` 取回多写 1 个字节，「逐字节一致」不成立 | 已修（`ef382a4`）。**发布前对最终 jar 实跑过**：277282 → 277282 字节，sha256 一致，`cmp` 无差异 |
+> | 内嵌 jackson-databind **2.19.0**，命中 5 条公告（2 HIGH） | 内嵌 **2.21.5**（`e7594a0`）。解压 jar 核对过 `pom.properties` |
+>
+> v0.4.2 是「产物落后于 master」的实例：它的 jar 里是修复之前的代码，而 master 上早已修好。
+> 现在 `release.yml` 里有两道发版闸（依赖告警 + tag 是否落后且动了构建配置），
+> 这类情况不会再静默发出。
+>
+> 如果你确实要用 v0.4.2：
+> - **别信它的「逐字节一致」**——取回的文件会比原文多一个换行字节；
+> - 它的内嵌 Jackson 建议在宿主工程里显式钉 `jackson-bom` ≥ 2.21.5。
 
 ### 方式二：从源码构建
 
@@ -275,21 +276,21 @@ token 默认按 `o200k_base` 真实词表计，报告里会标注实际用的是
 > <dependency>
 >     <groupId>io.github.xiaoxusop</groupId>
 >     <artifactId>ctxpress-core</artifactId>
->     <version>0.4.2</version>
+>     <version>0.4.3</version>
 > </dependency>
 >
 > <!-- 可选：接真实 BPE 词表，让 token 预算变成可计费口径 -->
 > <dependency>
 >     <groupId>io.github.xiaoxusop</groupId>
 >     <artifactId>ctxpress-tokenizer-jtokkit</artifactId>
->     <version>0.4.2</version>
+>     <version>0.4.3</version>
 > </dependency>
 > ```
 
 **从 Release 安装**（在 Maven Central 就绪之前，这是唯一能真正装上的方式）：
 
 ```bash
-V=0.4.2
+V=0.4.3
 curl -LO https://github.com/XIAOXUsop/ctxpress/releases/download/v$V/ctxpress-core-$V.jar
 curl -LO https://github.com/XIAOXUsop/ctxpress/releases/download/v$V/ctxpress-tokenizer-jtokkit-$V.jar
 
@@ -450,17 +451,18 @@ v0.2.0 修复的（这些是上面那些修复**没有覆盖到**的部分）：
     它还顺带掩盖了更糟的情况：原文末尾有多个换行时少写一个也不会被发现。
     测试数据的构造恰好也不以换行结尾，于是「追加」与「丢失」两个方向全被盖住
 
-    > ⚠️ **这条的修复不在任何已发布版本里。** 它挂在本节「v0.2.0 修复的」分组下，
+    > ⚠️ **这条的修复不在 v0.4.2 及更早的任何版本里。** 它挂在本节「v0.2.0 修复的」分组下，
     > 但那个分组是错的——逐 tag 数过 `Main.java` 里 `out.print` 的出现次数：
     > **v0.1.0 是 2 次、v0.2.0 起 4 次、v0.3.0 起到 v0.4.2 一直是 6 次**。
     > 也就是说这些无条件换行是逐版**加进去**的，**从来没有任何一个版本移除过它**。
-    > 真正的修复是 `ef382a4`（2026-09-19），**晚于 v0.4.2，尚未发布**。
+    > 真正的修复是 `ef382a4`（2026-09-19），晚于 v0.4.2。
     >
     > 实测确认（2026-09-19，从 Release 下载产物实跑，输入 347652 字节）：
     > **v0.4.2 取回 347653 字节（多 1 字节）**；master 构建的同一链路取回 347652（一致）。
-    >
-    > 所以在下一个版本发出去之前，**「逐字节一致」这句话对下载 Release 的人不成立**。
     > 归档引用 `ORIG-xxx` 正是原文内容的 sha256 前缀——用户拿它一校验就会发现。
+    >
+    > ✅ **`v0.4.3` 起已发布**。发布前对最终 jar 实跑过同一条链路：
+    > 277282 → 277282 字节、sha256 一致、`cmp` 无差异。
 
 13. **NDJSON 被静默截断** —— 420 token 的 30 行 NDJSON "压缩"到 14 token，
     报告里 `truncated=false`、无省略标注，看不出丢了 96.7%
