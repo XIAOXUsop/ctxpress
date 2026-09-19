@@ -32,7 +32,15 @@ jobs:
       # 干净的是 master，不是那个产物。ctxpress 现在就有这么一处（`ef382a4` 未发布）。
       - name: Preflight (dependency alerts + tag vs default branch)
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # 闸一优先用 PAT：**Dependabot 告警接口不接受 GITHUB_TOKEN**。
+          # 实测（2026-09-20）：即便给 GITHUB_TOKEN 授 `security-events: read`，
+          # 仍然返回 403 `Resource not accessible by integration`；匿名访问是 401。
+          # 配了 `PREFLIGHT_TOKEN`（一个 PAT）才真正查得动。
+          GH_TOKEN: ${{ secrets.PREFLIGHT_TOKEN || secrets.GITHUB_TOKEN }}
+          # 没配 PAT 时把闸一降级为「大声告警后放行」。**这不是为了省事**——
+          # 是"整条发布流程永久卡死"与"明确降级并说清楚"之间的取舍；
+          # 真读到高危告警时，脚本照样拒绝（那条路径不受影响）。
+          PREFLIGHT_ALERTS_OPTIONAL: ${{ secrets.PREFLIGHT_TOKEN == '' && '1' || '' }}
         run: |
           set -euo pipefail
           repo="${{ github.repository }}"
@@ -49,11 +57,14 @@ jobs:
             "https://api.github.com/repos/$repo/dependabot/alerts?state=open&per_page=100" \
             > "$out/alerts.http"
 
-          python3 scripts/release_preflight.py \
-            --alerts-http "$out/alerts.http" \
-            --alerts-json "$out/alerts.json" \
-            --tag "${{ github.ref_name }}" \
-            --base "$base"
+          args=(--alerts-http "$out/alerts.http" --alerts-json "$out/alerts.json"
+                --tag "${{ github.ref_name }}" --base "$base")
+          if [ -n "${PREFLIGHT_ALERTS_OPTIONAL:-}" ]; then
+            echo "::warning::未配置 PREFLIGHT_TOKEN——闸一（依赖告警）本轮无法执行，降级为告警放行。Dependabot 告警接口不接受 GITHUB_TOKEN。配一个 PAT 作为仓库 secret 即可启用。"
+            args+=(--alerts-optional)
+          fi
+
+          python3 scripts/release_preflight.py "${args[@]}"
 
       - name: Set up JDK 21
         uses: actions/setup-java@v5

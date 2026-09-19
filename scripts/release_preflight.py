@@ -90,14 +90,31 @@ def _git(*args, cwd=None):
     )
 
 
-def check_alerts(http_path, json_path, fail_on, emit):
-    """返回 True 表示放行。"""
+def check_alerts(http_path, json_path, fail_on, emit, optional=False):
+    """返回 True 表示放行。
+
+    `optional=True` 时，「查不动」降级为**大声告警后放行**，而不是拒绝发布。
+    这个开关是为一个实测出来的平台限制准备的，**不是给"懒得查"用的**：
+
+        GitHub 的 Dependabot 告警接口（`GET /repos/{o}/{r}/dependabot/alerts`）
+        **不接受 Actions 的 `GITHUB_TOKEN`**——即便授予 `security-events: read`，
+        实测仍然 403 `Resource not accessible by integration`；匿名访问则是 401。
+        它只认 PAT 或 GitHub App token。
+
+    所以 CI 里要用闸一，必须配一个 PAT secret（下面 workflow 里叫 `PREFLIGHT_TOKEN`）。
+    没配时只有两条路：整条发布流程永久卡死，或者明确降级并说清楚。
+    这里选后者——但**降级只对"接口够不到"生效**：
+    真读到了告警、且达到阈值，照样拒绝（那条路径不受 optional 影响）。
+    """
     try:
         with open(http_path, encoding="utf-8") as fh:
             code = fh.read().strip()
     except OSError as exc:
-        emit(f"[闸一] 读不到 {http_path}（{exc}）——没有 HTTP 状态码就不知道查没查到，拒绝发布")
-        return False
+        emit(f"[闸一] 读不到 {http_path}（{exc}）——没有 HTTP 状态码就不知道查没查到")
+        return _unchecked(optional, emit, "连状态码文件都没有")
+    except Exception as exc:  # noqa: BLE001 - 任何读取失败都应走同一条降级路径
+        emit(f"[闸一] 读 {http_path} 出错：{exc}")
+        return _unchecked(optional, emit, "状态码文件读不出来")
 
     if code != "200":
         detail = ""
@@ -109,22 +126,30 @@ def check_alerts(http_path, json_path, fail_on, emit):
         except (OSError, ValueError):
             pass
         emit(f"[闸一] 拿不到 Dependabot 告警：HTTP {code} {detail}".rstrip())
-        if code in ("403", "404"):
-            emit("[闸一] 403/404 通常是两种情况：仓库的 Dependabot alerts 没开，"
-                 "或 workflow 的 GITHUB_TOKEN 缺 `security-events: read` 权限")
-        emit("[闸一] 拒绝发布——**查不动不等于没有告警**")
-        return False
+        if code in ("401", "403"):
+            emit("[闸一] 401/403 是 **GITHUB_TOKEN 够不到这个接口**的典型表现"
+                 "（实测：授权 security-events: read 也一样）。")
+            emit("[闸一] 修法：给仓库加一个 PAT secret（workflow 里读 `PREFLIGHT_TOKEN`），"
+                 "或在打 tag 前本地跑一遍 `--tag <tag> --base origin/<分支>`。")
+        elif code == "404":
+            emit("[闸一] 404 多半是仓库的 Dependabot alerts 没开。")
+        # 401/403 = 平台不让这个 token 查；404 = 仓库的 Dependabot alerts 没开。
+        # 两者都是"这个仓库/这次运行拿不到告警"，可以由 optional 降级。
+        # 其余状态码（5xx、连不上时的 000）是**临时故障**，一律拒绝——
+        # 网络抖一下就把检查放过去，等于没有检查。
+        platform_limited = code in ("401", "403", "404")
+        return _unchecked(optional, emit, f"HTTP {code}", platform_limited=platform_limited)
 
     try:
         with open(json_path, encoding="utf-8") as fh:
             alerts = json.load(fh)
     except (OSError, ValueError) as exc:
-        emit(f"[闸一] HTTP 200 但告警内容读不出来（{exc}）——无法判定，拒绝发布")
-        return False
+        emit(f"[闸一] HTTP 200 但告警内容读不出来（{exc}）——无法判定")
+        return _unchecked(optional, emit, "响应体解析失败")
 
     if not isinstance(alerts, list):
-        emit("[闸一] 告警响应不是数组——无法判定，拒绝发布")
-        return False
+        emit("[闸一] 告警响应不是数组——无法判定")
+        return _unchecked(optional, emit, "响应不是数组")
 
     threshold = SEVERITIES.index(fail_on)
     blocking = []
@@ -146,8 +171,8 @@ def check_alerts(http_path, json_path, fail_on, emit):
             blocking.append((severity, package, ghsa, summary))
 
     if unknown:
-        emit(f"[闸一] 有 {len(unknown)} 条告警的字段缺失或级别不认识——无法判定，拒绝发布")
-        return False
+        emit(f"[闸一] 有 {len(unknown)} 条告警的字段缺失或级别不认识——无法判定")
+        return _unchecked(optional, emit, f"{len(unknown)} 条告警字段缺失")
 
     emit(f"[闸一] 开放依赖告警 {len(alerts)} 条，其中 {fail_on} 及以上 {len(blocking)} 条")
     for severity, package, ghsa, summary in blocking:
@@ -159,8 +184,29 @@ def check_alerts(http_path, json_path, fail_on, emit):
         emit("[闸一] 注意：正好取满一页（100 条），后面可能还有未取到的告警")
 
     if blocking:
+        # **这条路径不受 optional 影响**：真读到了高危告警就必须拦。
         emit(f"[闸一] 拒绝发布：先处理这 {len(blocking)} 条，再打 tag")
         return False
+    return True
+
+
+def _unchecked(optional, emit, why, platform_limited=False):
+    """「查不动」的统一出口——两种处理方式在这里分叉。
+
+    默认：拒绝发布。**查不动不等于没有告警**，两者在日志里长得一模一样，
+    当成通过就是把风险静默放行。
+
+    `optional=True` **且 `platform_limited=True`**：放行——但只有这一种情形算数：
+    **平台不让这个 token 查**（401/403）。其余的「查不动」都不是平台问题，
+    而是**我们自己的管道坏了**（状态码文件没写出来、响应不是数组、字段缺失），
+    那些必须一律拦住——把脚本自己的故障当成"环境限制"放过去，
+    等于给了一个"把检查弄坏就能绕过"的后门。
+    """
+    if not (optional and platform_limited):
+        emit("[闸一] 拒绝发布——**查不动不等于没有告警**")
+        return False
+    emit(f"[闸一] !! 无法检查依赖告警（{why}），本次**没有**做这项检查")
+    emit("[闸一] !! 按 `--alerts-optional` 放行——这一轮的开销由调用方承担")
     return True
 
 
@@ -232,10 +278,15 @@ def main(argv=None):
     parser.add_argument("--base", required=True, help="默认分支的 ref，如 origin/master")
     parser.add_argument("--skip-behind-check", action="store_true",
                         help="只跑闸一（本地手测用；CI 里不许加这个）")
+    parser.add_argument("--alerts-optional", action="store_true",
+                        help="接口够不到时降级为告警而不是拒绝发布。"
+                             "只在确实拿不到 PAT 时用——详见 check_alerts 的说明。"
+                             "**注意：读到高危告警时照样拒绝，这个开关管不着那条路径。**")
     args = parser.parse_args(argv)
 
     emit = Emitter()
-    ok_alerts = check_alerts(args.alerts_http, args.alerts_json, args.fail_on, emit)
+    ok_alerts = check_alerts(args.alerts_http, args.alerts_json, args.fail_on, emit,
+                             optional=args.alerts_optional)
     if args.skip_behind_check:
         emit("[闸二] 已按要求跳过")
         ok_behind = True

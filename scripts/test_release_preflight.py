@@ -47,8 +47,8 @@ class AlertsGate(unittest.TestCase):
             else:
                 json.dump(body, fh)
 
-    def run_gate(self, fail_on="high"):
-        return rp.check_alerts(self.http, self.json, fail_on, self.emit)
+    def run_gate(self, fail_on="high", optional=False):
+        return rp.check_alerts(self.http, self.json, fail_on, self.emit, optional=optional)
 
     def text(self):
         return "\n".join(self.lines)
@@ -74,6 +74,42 @@ class AlertsGate(unittest.TestCase):
         # 阈值是可配的，但改动它必须真的改变结论——否则这个参数就是摆设。
         self.write(200, [_alert("medium")])
         self.assertFalse(self.run_gate(fail_on="medium"))
+
+    # ── `optional=True`：为「接口够不到」准备的降级开关 ──────────────────
+    #
+    # 背景（2026-09-20 实测）：Dependabot 告警接口**不接受 Actions 的 GITHUB_TOKEN**，
+    # 即便授了 `security-events: read` 也返回 403；匿名访问是 401。
+    # 没有 PAT secret 时，要么整条发布流程永久卡死，要么明确降级。
+    #
+    # 这一组用例钉住两件事：**降级只对"够不到"生效**，而且**降级要说出来**。
+
+    def test_optional_lets_403_through_but_says_so(self):
+        """降级放行可以，但必须打得足够响——这一轮确实没检查依赖告警。"""
+        self.write(403, {"message": "Resource not accessible by integration"})
+        self.assertTrue(self.run_gate(optional=True))
+        self.assertIn("没有**做这项检查", self.text())
+        self.assertIn("PREFLIGHT_TOKEN", self.text())
+
+    def test_optional_still_blocks_on_real_findings(self):
+        """**这条是关键**：真读到高危告警时，`optional` 管不着——照样拒绝。
+
+        否则这个开关就成了"让它变绿"的后门。
+        """
+        self.write(200, [_alert("critical")])
+        self.assertFalse(self.run_gate(optional=True))
+
+    def test_optional_does_not_turn_unknown_severity_into_a_pass(self):
+        """级别不认识时也不能借 `optional` 溜过去——那同样是"无法判定"。"""
+        self.write(200, [_alert("HIGH")])
+        self.assertFalse(self.run_gate(optional=True))
+
+    def test_optional_still_blocks_when_body_is_not_an_array(self):
+        self.write(200, {"message": "Not Found"})
+        self.assertFalse(self.run_gate(optional=True))
+
+    def test_optional_still_blocks_when_http_file_is_missing(self):
+        self.assertFalse(rp.check_alerts(
+            os.path.join(self.dir, "nope.http"), self.json, "high", self.emit, optional=True))
 
     def test_cannot_check_is_not_a_pass(self):
         """403 = 没开 Dependabot 或 token 缺权限。它和"没有告警"都表现为查不到东西。"""
