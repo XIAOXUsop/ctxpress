@@ -18,23 +18,38 @@
 
 **保证：**
 
-- **输出 ≤ 你给的预算。** 做不到时（只有一种情形：命中保护规则的内容本身就超过了预算），
-  报告里 `overBudgetBy > 0`，**绝不静默超标**。
+- **输出 ≤ 你给的预算。** 做不到时报告里 `overBudgetBy > 0`，**绝不静默超标**。
+  做不到有两种成因，报告用动作名分开：**命中保护规则的内容本身就超预算**
+  （`NOTHING_LEFT_TO_TRIM_EXCEPT_PROTECTED_VALUES`，出口是放宽保护额度）
+  与**压根没有可裁的结构**（`NO_TRIMMABLE_STRUCTURE_LEFT`——对象字段一个不能少、
+  字符串都在截断阈值以内、没有数组可采样；出口是提高预算，调保护额度不会有任何变化）。
+  这两种此前报同一个名字，于是后者会被引到前者那条路上。
 - **命中保护规则的内容按构造保留**——它是"不许动"的，不参与取舍。
-- **未保护部分可经内容寻址归档逐字节取回**，且归档引用被写进压缩内容本身。
+- **未保护部分可经内容寻址归档逐字节取回**；**归档引用通常会被写进压缩内容本身**，
+  但有一个例外见下。
 - **输出不含原文没有的内容。** 每个字节要么逐字来自输入，要么属于已声明的标记文法
   （日志：`…[省略 N 行]…`、折叠 `<原行>   [重复 N 次]`；文本：`…[省略 N 句]…`；
   JSON：`…[N 字符已省略]…` / `{"_omitted":N}`；归档引用：`_ctxpress_archive`）。
-  这五类都由 `benchmarks/fidelity.py` 的保真证书逐条比对——**每一行的前缀都必须逐字来自输入**。
+  > ⚠️ **保真证书目前只覆盖日志那一类。** `benchmarks/fidelity.py` 的 `MARKER` 只认
+  > `…[省略 N 行]…`，两组语料（`build_corpus` 与折叠路径）也都是日志——
+  > 也就是说 JSON 的 `{"_omitted":N}` 与文本的 `…[省略 N 句]…` **从未进过证书**。
+  > 这里原先写的是"这五类都由保真证书逐条比对"，**那句话是错的**。
+  > 而它正是漏掉下面那条 JSON 改写缺陷的盲区：会凭空造字节的路径恰好不在证书的覆盖里。
+  > 补法是把 JSON / TEXT 语料也喂给 `provenance`，并为它们的标记文法补正则
+  > （不补正则就直接喂会误报——折叠路径那次就是这么翻车的）。**尚未做。**
 
 **不保证：**
 
 - **注入字段会破坏强类型反序列化。** 压缩后的 JSON 里有 `_omitted` 与 `_ctxpress_archive`，
   用 `List<Foo>` 直接接会失败——请用 `JsonNode` 接收。
 - **根为数组的 JSON，截断后 schema 不再兼容**（数组里会多出一个计数节点）。
-- **"仅去空白"不是逐字节无损。** 它只去缩进换行，但 Jackson 会归一化数值字面量
-  （`1.00` → `1.0`），也会还原 Unicode 转义。**值等价，字节不等价**——所以报告里写的是
-  `MINIFIED_ONLY`，不是 `LOSSLESS`。
+- **「仅去空白」现在是逐字节无损的（2026-09-22 起）。** 这一档改成纯文本扫描：
+  只在字符串字面量之外删空白，数值字面量、Unicode 转义、尾随零一律原样保留。
+  改之前它是"解析再序列化"，Jackson 会顺手改写数值——实测 `1e400` → `"Infinity"`、
+  `99999999999999999999.99` → `1.0E20`、`1e-400` → `0.0`，
+  **而报告里只写 `MINIFIED_ONLY`、`archiveRef` 是 null，没有任何标记说值被改过**。
+  那才是真正危险的地方：一个自称"只去了空白"的产物吐出了错数字。
+  这一档的覆盖范围仅限"装得下"的情形；走到采样/截断档时仍有信息损失，那时靠归档取回。
 - **预算的计量口径是词表相关的。** 命令行默认用 `o200k_base` 真实词表；
   作为库引用 `ctxpress-core` 时默认是启发式估算（CJK 1 token/字、其余 4 字符 1 token），
   它对日志/JSON/代码**偏乐观**（实测同一份日志低估 **37%**）。
@@ -147,8 +162,18 @@ press.retrieve(result.archiveRef())     // 后续需要时取回原文，逐字�
 > `ARCHIVE_REF_NOT_EMBEDDABLE`——**内容里既没有 `ORIG-…` 也没有 `_ctxpress_archive`**，
 > 而本节这句话当时是无条件承诺。复现输入很常见：根为数组、2 个元素、
 > 每个元素带一段 2 万字符的字符串（Agent 工具输出最朴素的形态之一）。
-> 现在只有"连字符串都没被截断"时才真的没有承载位置，那一种会如实记为
-> `ARCHIVE_REF_NOT_EMBEDDABLE`——报告里看得见，不是静默丢弃。
+>
+> **还有一格是上面这张表没覆盖的（同一天实测，仍未修）：根是数组、根数组自己没被截断、
+> 挂掉的是内层数组，且全程没有字符串可承载。** 例如 `[{"items":[0,1,…,499]}]`
+> 在预算 200 下：`actions=[ARRAY_SAMPLED_LIMIT=83, ARCHIVE_REF_NOT_EMBEDDABLE]`，
+> 报告行里有 `归档=ORIG-…`，而**内容里一个 `ORIG-` 都没有**——
+> `retrieve --ref` 照样取得回来（归档本身是好的），但读到这段内容的模型无从知道。
+> 这一格没有承载位置不是疏忽：根数组没被截断就没有 `_omitted` 节点可挂，
+> 而剩下的内容全是数字，硬塞一个字段就得改动数据结构。
+> **目前只能靠报告行**，动作名 `ARCHIVE_REF_NOT_EMBEDDABLE` 会明说这一点。
+>
+> 把上面这段和契约那一条放在一起读才是准确的：**归档始终可取回；
+> 引用只在结构允许时被写进内容。**
 
 归档是**内容寻址**（`ORIG-` + SHA-256 前 16 位）：同一段原文重复压缩只存一份，
 且引用稳定——换了后端、重启了进程，同一个 ref 依然指向同一段内容。这正是它能落盘的前提。
@@ -168,12 +193,25 @@ ContextPress press = ContextPress.withArchive(Policy.builder().maxTokens(2000).b
 ### token 口径：估算还是真实词表
 
 同一份内容在两种口径下的数字能差 60%（实测同一份日志：启发式 68,571、`o200k_base` 109,398）。
-所以报告里**永远**写着这次用的是哪一种：
+所以报告里**永远**写着这次用的是哪一种。下面是同一份 `benchmarks/data/app.log`、
+同一个 `--max-tokens 9000` 的两次实跑：
+
+```bash
+java -jar ctxpress-cli/target/ctxpress.jar compress --tokenizer heuristic --max-tokens 9000 benchmarks/data/app.log
+java -jar ctxpress-cli/target/ctxpress.jar compress --max-tokens 9000 benchmarks/data/app.log
+```
 
 ```
-LOG: 68571 -> 6048 tokens (-91.2%), 保护 12 段, 计数口径=heuristic（启发式估算口径，偏乐观）
-LOG: 109398 -> 9612 tokens (-91.2%), 保护 12 段, 计数口径=o200k_base（真实词表口径）
+LOG: 68571 -> 8506 tokens (-87.6%), 保护 60 段, 计数口径=heuristic（启发式估算口径，偏乐观）
+LOG: 109398 -> 8909 tokens (-91.9%), 保护 60 段, 计数口径=o200k_base（真实词表口径）
 ```
+
+> 这两行原先是 `6048 (-91.2%)` / `9612 (-91.2%)`、`保护 12 段`，
+> **一条都对不上**（2026-09-22 复跑）。数字随语料与预算走，所以上面把命令一起给了；
+> 而 `保护 段数` 那一项与预算无关、只与语料和保护规则有关，
+> 12 与 60 的差距说明它比"数字稍微旧了"更严重——它是从另一份语料上抄来的。
+> 这一段和 `--archive` 那段示例是**正文里没有被任何门禁比对过的数字**
+> （README 那张 4 格表有 `budget_matrix.check_readme_table` 逐格复算，示例行没有）。
 
 估算偏乐观，意味着"按估算卡住预算"的内容真实计费可能超。要在意这一点时有两种做法：
 
@@ -271,13 +309,21 @@ cat huge.json | java -jar ctxpress-cli/target/ctxpress.jar compress --max-tokens
 java -jar ctxpress-cli/target/ctxpress.jar compress --must-keep 'TRACE-[0-9A-F]+' app.log
 
 # 可逆：压掉的原文进归档，报告行里给出引用，随时取回（逐字节一致）
-java -jar ctxpress-cli/target/ctxpress.jar compress --max-tokens 2000 \
+java -jar ctxpress-cli/target/ctxpress.jar compress --max-tokens 9000 \
     --archive .ctxpress/archive.log app.log > small.log
-#   → 报告(stderr)：LOG: 97999 -> 1973 tokens (-98.0%), …, 计数口径=o200k_base（真实词表口径）, 归档=ORIG-30f2518ba6415194
+#   → 报告(stderr)：LOG: 109398 -> 8936 tokens (-91.8%), 保护 60 段,
+#      计数口径=o200k_base（真实词表口径）, 动作=[PROTECTED_LINES=60, OMITTED_LINES=2824_IN_86_GAPS],
+#      归档=ORIG-56df9d3f58892e45
 
 java -jar ctxpress-cli/target/ctxpress.jar retrieve \
-    --archive .ctxpress/archive.log --ref ORIG-30f2518ba6415194 > restored.log
+    --archive .ctxpress/archive.log --ref ORIG-56df9d3f58892e45 > restored.log
+cmp app.log restored.log   # 无声 = 逐字节一致
 ```
+
+> 这里的数字原先写的是 `97999 -> 1973 tokens (-98.0%)`、`归档=ORIG-30f2518ba6415194`——
+> **两个都对不上**（2026-09-22 复跑；`ORIG-` 是原文 sha256 前 16 位，所以它一错就说明
+> 当时跑的不是这一份语料）。上面的命令已实测跑通：`retrieve` 回来的文件与原日志 `cmp` 无声。
+> 数字会随笔数、预算与语料变，命令给了就能重跑。
 
 选项：`--max-tokens N` · `--kind JSON|LOG|TEXT` · `--must-keep REGEX` · `--head N` · `--tail N`
 · `--tokenizer o200k_base|cl100k_base|r50k_base|p50k_base|heuristic`

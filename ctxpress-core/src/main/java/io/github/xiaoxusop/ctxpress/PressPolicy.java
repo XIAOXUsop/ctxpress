@@ -152,7 +152,7 @@ public final class PressPolicy {
         private List<Pattern> mustKeep = DEFAULT_MUST_KEEP.stream().map(Pattern::compile).toList();
         private int headLines = 40;
         private int tailLines = 20;
-        private int maxArrayItems = 8;
+        private int maxArrayItems = Integer.MAX_VALUE;
         private double maxProtectedRatio = 0.6;
         private TokenCounter tokenCounter = TokenEstimator.defaultCounter();
 
@@ -213,6 +213,20 @@ public final class PressPolicy {
             return this;
         }
 
+        /**
+         * 数组采样的**上限**，默认 {@link Integer#MAX_VALUE}（不额外收紧）。
+         *
+         * <p>这是"用户可以收紧、但默认不收紧"的那类旋钮：
+         * 采样条数本身是**按预算反推**的（预算够就多留几条，见
+         * {@code JsonCompressor#chooseArrayLimit}），这里只是给它加一个天花板。
+         *
+         * <p>**这个上限此前是个空选项。** 字段存了、getter 也导出了，
+         * 但没有任何生产代码读它——`.maxArrayItems(50)` 静默无效。
+         * 而默认值当时是 `8`，所以"顺手把它接上"会立刻退回另一个更糟的状态：
+         * 每个数组都被固定截到 8 条，预算再宽也留不住——
+         * 那正是 README 里记为 P0 的「采样上限固定从 8 起步」。
+         * 接上它时把默认值一并改成不收紧，两件事必须同时做。
+         */
         public Builder maxArrayItems(int maxArrayItems) {
             this.maxArrayItems = Math.max(1, maxArrayItems);
             return this;

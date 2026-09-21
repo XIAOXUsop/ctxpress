@@ -88,15 +88,31 @@ public final class JsonCompressor implements Compressor {
 
         // 档位一：仅去掉缩进与换行。
         //
-        // 注意措辞：这**不是**"无损"。Jackson 会归一化数值字面量（1.00 → 1.0）、
-        // 把超出 double 范围的指数转成字符串（1e400 → "Infinity"）、丢超高精度小数的末尾位
-        // （0.1234567890123456789 → 0.12345678901234568），也会把 Unicode 转义还原成字符。
-        // 值等价，字节不等价。所以报告里写 MINIFIED_ONLY，文档里也只会说"仅去空白"。
+        // ── 为什么是文本扫描，而不是 root.toString() ────────────────────
+        //
+        // 这里原先用的是"解析再序列化"（`root.toString()`），注释里写着"值等价，字节不等价"。
+        // **"值等价"是错的。** 实测（2026-09-22，预算 64 逼出这一档）：
+        //
+        //     99999999999999999999.99  ->  1.0E20                 值变了
+        //     12345678901234567.89     ->  1.2345678901234568E16  精度丢了
+        //     1e400                    ->  "Infinity"             数字变成了字符串
+        //     1e-400                   ->  0.0                    下溢成零
+        //     100.00                   ->  100.0
+        //
+        // 而这一档报的动作是 `MINIFIED_ONLY`、`archiveRef` 是 null——
+        // **没有任何标记说值被改过**，调用方拿到的是"只去了空白"的报告和一个变了的数。
+        // 对账单、金额、ID 这类下游，这是静默的错误数据。
+        // README 的契约之一是「输出不含原文没有的内容：每个字节要么逐字来自输入，
+        // 要么属于已声明的标记文法」——`"Infinity"` 两条都不满足。
+        //
+        // 这一档本来就不需要解析：它要做的只是"去掉缩进与换行"，
+        // 而"哪些空白在字符串里"用一个字符扫描就能确定。改成文本扫描之后，
+        // 输出**逐字节来自输入**，这一档的承诺才真的成立。
         //
         // 这一档早先是完全缺失的，代价荒唐：129997 token 的 JSON 在 128000 预算下
         // 只输出 132 token——而它去掉缩进后是 77494 token，明明装得下，
         // 却把数组里 99.8% 的元素丢掉了。
-        String minified = root.toString();
+        String minified = minifyTextually(content);
         int minifiedTokens = counter.count(minified);
         if (minifiedTokens <= policy.maxTokens()) {
             return new PressResult(minified, new PressReport(ContextKind.JSON,
@@ -140,12 +156,60 @@ public final class JsonCompressor implements Compressor {
         int compressedTokens = counter.count(rendered);
         int over = Math.max(0, compressedTokens - policy.maxTokens());
         if (over > 0) {
-            actions.add("NOTHING_LEFT_TO_TRIM_EXCEPT_PROTECTED_VALUES");
+            // 超预算有两种成因，报出来的名字必须分得开：
+            //
+            //   * 命中了保护规则的内容本身就超预算 —— 那就只能放宽保护额度（或接受超标）；
+            //   * 压根没有可裁的结构（对象字段一个不能少、字符串都在截断阈值以内、
+            //     没有数组可采样）—— 这时去调 maxProtectedRatio **什么也不会变**。
+            //
+            // 这里原先一律报 NOTHING_LEFT_TO_TRIM_EXCEPT_PROTECTED_VALUES。
+            // 实测（2026-09-22）：一份 20 字段 × 短字符串值的 JSON，
+            // `protectedSegments=0` 而报的正是"除受保护值外已无可裁剪"——
+            // 按这个名字去调保护额度，怎么调都不会动。
+            actions.add(protectedCount[0] > 0
+                    ? "NOTHING_LEFT_TO_TRIM_EXCEPT_PROTECTED_VALUES"
+                    : "NO_TRIMMABLE_STRUCTURE_LEFT");
         }
         return new PressResult(rendered, new PressReport(ContextKind.JSON, originalTokens, compressedTokens,
                 TokenEstimator.reductionPercent(originalTokens, compressedTokens),
                 protectedCount[0], actions, over, TokenCounterInfo.of(counter)),
                 truncated[0] ? archiveRef : null);
+    }
+
+    /**
+     * 去掉 JSON 结构里的空白，**其余字符逐字节保留**。
+     *
+     * <p>只在字符串字面量之外删空白：扫描时跟踪"是否在字符串内"与转义状态，
+     * 因此 `{"a": "x  y"}` 里的两个空格原样留着，而字段之间的缩进与换行被去掉。
+     *
+     * <p>这是"仅去空白"这一档唯一诚实的实现方式——任何"解析再序列化"的写法
+     * 都会顺手改写数值字面量（见 {@link #compress} 里的实测清单）。
+     */
+    private static String minifyTextually(String json) {
+        StringBuilder out = new StringBuilder(json.length());
+        boolean inString = false;
+        boolean escaped = false;
+        for (int i = 0; i < json.length(); i++) {
+            char c = json.charAt(i);
+            if (inString) {
+                out.append(c);
+                if (escaped) {
+                    escaped = false;
+                } else if (c == '\\') {
+                    escaped = true;
+                } else if (c == '"') {
+                    inString = false;
+                }
+                continue;
+            }
+            if (c == '"') {
+                inString = true;
+                out.append(c);
+            } else if (c != ' ' && c != '\t' && c != '\n' && c != '\r') {
+                out.append(c);
+            }
+        }
+        return out.toString();
     }
 
     /**
@@ -241,6 +305,10 @@ public final class JsonCompressor implements Compressor {
     private int chooseArrayLimit(JsonNode root, PressPolicy policy, String archiveRef, int largestArray,
                                  int budget, int[] counters, boolean[] flags) {
         int ceiling = Math.min(MAX_ARRAY_LIMIT, Math.max(1, largestArray));
+        // 用户显式收紧的上限（`PressPolicy.Builder.maxArrayItems`）。
+        // 这个是**天花板**，不是起点：采样条数仍然按预算反推（见下面那段二分），
+        // 上限只在反推结果比它大时才生效。默认 Integer.MAX_VALUE = 不收紧。
+        ceiling = Math.min(ceiling, Math.max(1, policy.maxArrayItems()));
         if (costAt(root, policy, ceiling, counters, flags, archiveRef) <= budget) {
             return ceiling;   // 一个数组元素都不用丢
         }
