@@ -119,11 +119,12 @@ public final class JsonCompressor implements Compressor {
 
         int[] probeCounters = new int[1];
         boolean[] probeFlags = new boolean[1];
-        int limit = chooseArrayLimit(root, policy, largestArray, budget, probeCounters, probeFlags);
+        int limit = chooseArrayLimit(root, policy, archiveRef, largestArray, budget, probeCounters, probeFlags);
 
         protectedCount[0] = 0;
         truncated[0] = false;
-        JsonNode compressed = shrink(root, policy, limit, protectedCount, truncated);
+        boolean[] markerUsed = {false};
+        JsonNode compressed = shrink(root, policy, limit, protectedCount, truncated, archiveRef, markerUsed);
 
         if (limit < Math.min(MAX_ARRAY_LIMIT, Math.max(1, largestArray))) {
             actions.add("ARRAY_SAMPLED_LIMIT=" + limit);
@@ -132,7 +133,7 @@ public final class JsonCompressor implements Compressor {
             actions.add("PROTECTED_JSON_VALUES=" + protectedCount[0]);
         }
         if (truncated[0] && archiveRef != null) {
-            embedArchiveRef(compressed, root, limit, archiveRef, actions);
+            embedArchiveRef(compressed, root, limit, archiveRef, markerUsed, actions);
         }
 
         String rendered = compressed.toString();
@@ -155,10 +156,12 @@ public final class JsonCompressor implements Compressor {
      * <p>根是数组时没有"字段"可写，退而把引用放进**根数组自己的 {@code _omitted} 计数节点**里。
      * 这比包一层 {@code {"data": [...]}} 好：包一层会把根类型从数组变成对象，
      * 强类型反序列化直接失败；而 {@code _omitted} 已经是个记账节点，再挂一个键只是元素级污染。
-     * 若根数组没被截断（只截了内层数组或字符串），就没有可承载的位置，如实记为不可嵌入。
+     * 若根数组没被截断（只截了内层数组或字符串），引用已经由 {@code shrink} 写进
+     * 第一条字符串省略标记里（见 {@code ARCHIVE_REF_EMBEDDED_IN_STRING_MARKER}）；
+     * 连字符串都没截断时才真的没有承载位置，如实记为不可嵌入。
      */
     private static void embedArchiveRef(JsonNode compressed, JsonNode root, int limit,
-                                        String archiveRef, List<String> actions) {
+                                        String archiveRef, boolean[] markerUsed, List<String> actions) {
         if (compressed.isObject()) {
             ((ObjectNode) compressed).put("_ctxpress_archive", archiveRef);
             actions.add("ARCHIVE_REF_EMBEDDED");
@@ -170,6 +173,15 @@ public final class JsonCompressor implements Compressor {
                 && compressed.size() > head && compressed.get(head).isObject()) {
             ((ObjectNode) compressed.get(head)).put("_ctxpress_archive", archiveRef);
             actions.add("ARCHIVE_REF_EMBEDDED_IN_OMITTED_NODE");
+            return;
+        }
+        if (markerUsed[0]) {
+            // 根数组没被截断，但**内层字符串**被截断了——引用已经在第一条省略标记里
+            // （由 shrink 写入）。日志与文本压缩器一直这么做，JSON 这边原先漏了：
+            // 实测根为数组、2 个元素、每个带一个 2 万字符的字符串时，动作是
+            // ARCHIVE_REF_NOT_EMBEDDABLE，内容里既没有 ORIG-… 也没有 _ctxpress_archive
+            // ——README 那句"读到这段内容的模型自己就知道怎么要回来"在这条路径上是假的。
+            actions.add("ARCHIVE_REF_EMBEDDED_IN_STRING_MARKER");
             return;
         }
         actions.add("ARCHIVE_REF_NOT_EMBEDDABLE");
@@ -196,7 +208,13 @@ public final class JsonCompressor implements Compressor {
 
     /** 归档字段写进内容时要额外占用的 token（ref 恒为 {@code ORIG-} + 16 位十六进制） */
     private static int archiveFieldCost(TokenCounter counter) {
-        return counter.count(",\"_ctxpress_archive\":\"ORIG-0123456789abcdef\"");
+        // 引用有两个可能的承载位置，预留要**取两者较大的那个**：
+        //   · 根是对象 → 写一个顶层字段
+        //   · 根是数组且数组本身没被截断 → 写进第一条字符串省略标记
+        // 只按前者留，后者那条路径就会越过预算——而"输出 ≤ 预算"是这个工具唯一的硬契约。
+        int field = counter.count(",\"_ctxpress_archive\":\"ORIG-0123456789abcdef\"");
+        int marker = counter.count("；原文可经 ctxpress 归档 ORIG-0123456789abcdef 取回");
+        return Math.max(field, marker);
     }
 
     /**
@@ -220,10 +238,10 @@ public final class JsonCompressor implements Compressor {
      *
      * @return 可用的 limit，保证其成本不超过预算
      */
-    private int chooseArrayLimit(JsonNode root, PressPolicy policy, int largestArray,
+    private int chooseArrayLimit(JsonNode root, PressPolicy policy, String archiveRef, int largestArray,
                                  int budget, int[] counters, boolean[] flags) {
         int ceiling = Math.min(MAX_ARRAY_LIMIT, Math.max(1, largestArray));
-        if (costAt(root, policy, ceiling, counters, flags) <= budget) {
+        if (costAt(root, policy, ceiling, counters, flags, archiveRef) <= budget) {
             return ceiling;   // 一个数组元素都不用丢
         }
         if (largestArray == 0) {
@@ -234,7 +252,7 @@ public final class JsonCompressor implements Compressor {
         int best = 0;
         while (lo <= hi) {
             int mid = (lo + hi) >>> 1;
-            if (costAt(root, policy, mid, counters, flags) <= budget) {
+            if (costAt(root, policy, mid, counters, flags, archiveRef) <= budget) {
                 best = mid;
                 lo = mid + 1;
             } else {
@@ -245,17 +263,22 @@ public final class JsonCompressor implements Compressor {
             return 1;         // 已最大程度截断仍装不下，交给上层如实上报
         }
         for (int candidate = best + 1; candidate < ceiling && candidate <= best + 32; candidate++) {
-            if (costAt(root, policy, candidate, counters, flags) <= budget) {
+            if (costAt(root, policy, candidate, counters, flags, archiveRef) <= budget) {
                 best = candidate;
             }
         }
         return best;
     }
 
-    private int costAt(JsonNode root, PressPolicy policy, int limit, int[] counters, boolean[] flags) {
+    private int costAt(JsonNode root, PressPolicy policy, int limit, int[] counters, boolean[] flags,
+                       String archiveRef) {
         counters[0] = 0;
         flags[0] = false;
-        return policy.tokenCounter().count(shrink(root, policy, limit, counters, flags).toString());
+        boolean[] markerUsed = {false};
+        // **必须用同一套标记**：标记里多出来的那截引用也占 token，
+        // 这里不算进去，最终输出就会越过预算——而那正是这个工具唯一的硬契约。
+        return policy.tokenCounter()
+                .count(shrink(root, policy, limit, counters, flags, archiveRef, markerUsed).toString());
     }
 
     /** 文档里最长的数组有多长——数组采样上限的搜索上界 */
@@ -276,13 +299,14 @@ public final class JsonCompressor implements Compressor {
     }
 
     private JsonNode shrink(JsonNode node, PressPolicy policy, int arrayLimit,
-                            int[] protectedCounter, boolean[] truncatedFlag) {
+                            int[] protectedCounter, boolean[] truncatedFlag,
+                            String archiveRef, boolean[] markerUsed) {
         if (node.isObject()) {
             ObjectNode result = JsonNodeFactory.instance.objectNode();
             Iterator<Map.Entry<String, JsonNode>> fields = node.fields();
             while (fields.hasNext()) {
                 Map.Entry<String, JsonNode> field = fields.next();
-                result.set(field.getKey(), shrink(field.getValue(), policy, arrayLimit, protectedCounter, truncatedFlag));
+                result.set(field.getKey(), shrink(field.getValue(), policy, arrayLimit, protectedCounter, truncatedFlag, archiveRef, markerUsed));
             }
             return result;
         }
@@ -295,19 +319,19 @@ public final class JsonCompressor implements Compressor {
             // 又把一个根本没被动过的数组标成"已截断"。
             if (node.size() <= arrayLimit || node.size() <= head + tail) {
                 for (JsonNode element : node) {
-                    result.add(shrink(element, policy, arrayLimit, protectedCounter, truncatedFlag));
+                    result.add(shrink(element, policy, arrayLimit, protectedCounter, truncatedFlag, archiveRef, markerUsed));
                 }
                 return result;
             }
             truncatedFlag[0] = true;
             for (int i = 0; i < head; i++) {
-                result.add(shrink(node.get(i), policy, arrayLimit, protectedCounter, truncatedFlag));
+                result.add(shrink(node.get(i), policy, arrayLimit, protectedCounter, truncatedFlag, archiveRef, markerUsed));
             }
             ObjectNode omitted = JsonNodeFactory.instance.objectNode();
             omitted.put("_omitted", node.size() - head - tail);
             result.add(omitted);
             for (int i = Math.max(head, node.size() - tail); i < node.size(); i++) {
-                result.add(shrink(node.get(i), policy, arrayLimit, protectedCounter, truncatedFlag));
+                result.add(shrink(node.get(i), policy, arrayLimit, protectedCounter, truncatedFlag, archiveRef, markerUsed));
             }
             return result;
         }
@@ -319,10 +343,19 @@ public final class JsonCompressor implements Compressor {
             }
             if (text.length() > STRING_TRUNCATE_THRESHOLD) {
                 truncatedFlag[0] = true;
-                String truncated = text.substring(0, STRING_HEAD)
-                        + "…[" + (text.length() - STRING_HEAD - STRING_TAIL) + " 字符已省略]…"
-                        + text.substring(text.length() - STRING_TAIL);
-                return TextNode.valueOf(truncated);
+                int omitted = text.length() - STRING_HEAD - STRING_TAIL;
+                // 归档引用只嵌**第一处**——与"根是对象时只写一个顶层字段"、
+                // "根数组被截断时只写进那一个 _omitted 节点"保持一致。
+                // 每个标记都嵌会让开销随截断字符串的数量线性增长，而预算契约是硬的。
+                String marker;
+                if (archiveRef != null && !markerUsed[0]) {
+                    markerUsed[0] = true;
+                    marker = "…[" + omitted + " 字符已省略；原文可经 ctxpress 归档 " + archiveRef + " 取回]…";
+                } else {
+                    marker = "…[" + omitted + " 字符已省略]…";
+                }
+                return TextNode.valueOf(text.substring(0, STRING_HEAD) + marker
+                        + text.substring(text.length() - STRING_TAIL));
             }
             return node;
         }

@@ -20,6 +20,35 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class ReversibilityTest {
 
+    /**
+     * 根是**数组**、数组本身没被截断、但内层**字符串**被截断时，
+     * 归档引用同样必须出现在压缩内容里。
+     *
+     * <p>这条路径此前是漏的，实测（根为数组、2 个元素、每个带一个 2 万字符的字符串）：
+     * 动作是 `ARCHIVE_REF_NOT_EMBEDDABLE`，内容里既没有 `ORIG-…` 也没有
+     * `_ctxpress_archive`。也就是说**读到这段内容的模型没有任何线索**知道有东西被省略、
+     * 以及怎么要回来——而 README 把"归档引用会被写进压缩内容本身"写成了无条件承诺。
+     *
+     * <p>日志与文本压缩器一直把引用写进各自的省略标记（"…[省略 N 行；原文可经
+     * ctxpress 归档 ORIG-… 取回]…"），只有 JSON 的字符串截断标记漏了。这条用例把它钉住。
+     */
+    @Test
+    void archiveRefIsEmbeddedWhenOnlyInnerJsonStringsAreTruncated() {
+        ContextPress press = ContextPress.withArchive(PressPolicy.builder().maxTokens(9000).build());
+        // 根数组只有 2 个元素（远小于数组采样上限），截的是元素**里面**那两段长字符串
+        String original = "[{\"id\":0,\"note\":\"" + "x".repeat(20_000) + "\"},"
+                + "{\"id\":1,\"note\":\"" + "y".repeat(20_000) + "\"}]";
+
+        PressResult result = press.press(original, ContextKind.JSON);
+
+        assertNotNull(result.archiveRef(), "发生压缩应给出归档引用");
+        assertTrue(result.content().contains(result.archiveRef()),
+                "归档引用必须出现在压缩内容里——否则读到它的模型无从知道怎么取回原文。"
+                        + "实际动作：" + result.report().actions());
+        assertTrue(result.content().contains("原文可经 ctxpress 归档"),
+                "省略标记里应当写明怎么取回，而不只是一个裸引用");
+    }
+
     private static String bigLog(int lines) {
         return IntStream.range(0, lines)
                 .mapToObj(i -> "2026-09-11 10:00:00 INFO 第 " + i + " 行内容各不相同")
