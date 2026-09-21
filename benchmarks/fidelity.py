@@ -49,6 +49,17 @@ PLAIN_NEEDLES = ["%s%04d" % ("".join(chr(ord("A") + (i * 7 + j * 3) % 26) for j 
 
 MARKER = re.compile(r"^\.\.\. \[省略 \d+ 行(；[^\]]*)?\] \.\.\.$")
 
+# 折叠标记：`<原文行>   [重复 N 次]`。
+#
+# 它**不在**上面那条 MARKER 里，于是这条路径上会出一类很隐蔽的误报：
+# 折叠后的行既不等于任何一行原文、又不匹配 MARKER，就被判成“凭空生成”。
+# 实测（2026-09-22）：拿一份含 300 行相邻重复的日志跑，证书报的那一行正是
+# 压缩器自己产出的折叠标记——**证书在冤枉压缩器**。
+#
+# 而主语料（build_corpus）每一行都带不同的 order 号，永远产生不出相邻重复，
+# 所以这条路径从来没被走到过：被测集合是空的，检查却一直绿。
+FOLDED = re.compile(r"^(?P<base>.+?)\s+\[重复 (?P<count>\d+) 次\]$")
+
 
 def estimate(text):
     """与 ctxpress 的启发式计数器同口径：CJK 码点 1 token，其余 4 字符 1 token"""
@@ -120,18 +131,39 @@ def recall(output, needles):
     hit = [n for n in needles if n in output]
     return len(hit) / len(needles) if needles else 0.0
 
-
 def provenance(text, output):
     """保真证书：输出的每一行要么逐字来自输入，要么匹配已声明的省略标记文法。
 
     这条是抽取式压缩相对摘要式压缩的硬优势——摘要可以有幻觉，
-    而"只做抽取 + 只加已声明的记账标记"在构造上就产生不了原文没有的内容。
+    而“只做抽取 + 只加已声明的记账标记”在构造上就产生不了原文没有的内容。
     """
     source = set(text.split("\n"))
-    fabricated = [line for line in output.split("\n")
-                  if line and line not in source and not MARKER.match(line)]
+    fabricated = []
+    for line in output.split("\n"):
+        if not line or line in source or MARKER.match(line):
+            continue
+        folded = FOLDED.match(line)
+        # 折叠行只有在**它的前缀逐字来自输入**时才算合规——
+        # 不比这一条的话，任何「<随便什么>   [重复 N 次]」都能混过去
+        if folded and folded.group("base") in source:
+            continue
+        fabricated.append(line)
     return fabricated
 
+
+def check_folding_provenance():
+    """专门走**折叠**那条路径：证书此前对它误报，而主语料根本产生不出折叠。"""
+    block = "2026-09-11 10:00:00 WARN  connection pool at 90% capacity, retrying"
+    filler = [
+        "2026-09-11 10:0%d:%02d INFO  order %d processed in %dms, customer C-%06d"
+        % (i // 60 % 60, i % 60, i, 5 + i % 900, i % 99999)
+        for i in range(400)
+    ]
+    text = "\n".join([block] * 300 + filler)
+    path = os.path.join(ROOT, "benchmarks", "data", "fidelity-folding.log")
+    io.open(path, "w", encoding="utf-8").write(text)
+    out = ctxpress(path, 300)
+    return provenance(text, out), out
 
 def main():
     if not os.path.exists(JAR):
@@ -182,6 +214,15 @@ def main():
           % (worst_protected * 100, worst_head * 100))
     print("保真证书: 全部 %d 个用例共 %d 行凭空生成" % (len(rows), total_fabricated))
 
+    # ── 折叠路径要**单独**跑一遍 ──────────────────────────────────────
+    #
+    # 上面那组用例的语料每一行都带不同的 order 号，**永远产生不出相邻重复**，
+    # 所以压缩器的折叠分支（`<行>   [重复 N 次]`）从来没有被走到过——
+    # 而证书此前对它**误报**（把压缩器自己产出的折叠标记判成"凭空生成"），
+    # 只是因为走不到，所以一直没红。这是"被测集合是空的"那一族。
+    folding_fabricated, _ = check_folding_provenance()
+    print("保真证书（折叠路径）: %d 行凭空生成" % len(folding_fabricated))
+
     import json
     io.open(REPORT_PATH, "w", encoding="utf-8").write(
         json.dumps({"placements": placements, "rows": rows},
@@ -189,6 +230,8 @@ def main():
     print("wrote %s" % REPORT_PATH)
 
     assert total_fabricated == 0, "输出里出现了原文没有的内容"
+    assert not folding_fabricated, (
+        "折叠路径上出现了原文没有的内容：%s" % folding_fabricated[:3])
 
 
 if __name__ == "__main__":
