@@ -6,7 +6,7 @@
 
     <groupId>io.github.xiaoxusop</groupId>
     <artifactId>ctxpress-parent</artifactId>
-    <version>0.4.3</version>
+    <version>0.4.4</version>
     <packaging>pom</packaging>
 
     <name>ctxpress</name>

@@ -1,5 +1,6 @@
 package io.github.xiaoxusop.ctxpress.compressor;
 
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.xiaoxusop.ctxpress.PressPolicy;
@@ -7,6 +8,7 @@ import io.github.xiaoxusop.ctxpress.PressResult;
 import io.github.xiaoxusop.ctxpress.TokenEstimator;
 import org.junit.jupiter.api.Test;
 
+import java.math.BigDecimal;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -228,6 +230,45 @@ class JsonCompressorTest {
         assertTrue(result.report().actions().contains("MINIFIED_ONLY"), result.report().summary());
         assertFalse(result.content().contains("\n"), "结构空白应当被去掉：" + result.content());
         assertTrue(result.content().contains("\"v  0\""), "字符串内部的空格不该动：" + result.content());
+    }
+
+    /**
+     * **第二、三档（按设计是有损的）里，数值的"值"也必须保住。**
+     *
+     * <p>第一档修成纯文本扫描之后，同一族问题还留在后面两档：它们走
+     * `ObjectMapper` 的"解析再序列化"，而 Jackson 默认把小数读成 double，
+     * 于是超出 double 精度的值会被改写。实测（预算 64、30 个字段）：
+     *
+     * <pre>
+     *   998877665544332211.99  ->  9.988776655443322E17
+     *   1e400                  ->  "Infinity"（还从数字变成了字符串）
+     *   1e-400                 ->  0.0
+     * </pre>
+     *
+     * <p>而报告里的动作是 `ARRAY_SAMPLED_LIMIT` / `NO_TRIMMABLE_STRUCTURE_LEFT`，
+     * **没有任何一条说"数值被改过"**。对这两档来说字节不必相同（本来就要截断），
+     * 但"值"是该守的那条线——所以这里比的是解析后的十进制值，不是字符串。
+     */
+    @Test
+    void nonMinifiedTiersStillPreserveNumericValues() throws Exception {
+        ObjectMapper exact = new ObjectMapper()
+                .enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS);
+
+        for (String literal : new String[]{"998877665544332211.99", "1e400", "1e-400", "100.00"}) {
+            StringBuilder json = new StringBuilder("{");
+            for (int i = 0; i < 30; i++) {
+                json.append("\"f").append(i).append("\":\"v").append(i).append("\",");
+            }
+            json.append("\"amount\":").append(literal).append('}');
+
+            PressResult result = compressor.compress(json.toString(), PressPolicy.builder().maxTokens(64).build());
+            JsonNode amount = exact.readTree(result.content()).get("amount");
+
+            assertTrue(amount != null && amount.isNumber(),
+                    "数值不该变成字符串或消失：" + literal + " → " + amount + " —— " + result.report().summary());
+            assertEquals(0, new BigDecimal(literal).compareTo(amount.decimalValue()),
+                    "数值被改写了：" + literal + " → " + amount.decimalValue());
+        }
     }
 
     @Test

@@ -47,7 +47,7 @@ import java.util.Map;
 public final class JsonCompressor implements Compressor {
 
     /**
-     * 两个开关都是为了**不静默改数据**：
+     * 四个开关都是为了**不静默改数据**：
      *
      * <ul>
      *   <li>{@code FAIL_ON_TRAILING_TOKENS}——不检查尾随内容时，NDJSON
@@ -57,11 +57,23 @@ public final class JsonCompressor implements Compressor {
      *       交给日志/文本压缩器，也不能假装压缩成功。</li>
      *   <li>{@code STRICT_DUPLICATE_DETECTION}——重复键默认保留最后一个、丢弃前面的值。
      *       JSON 规范没有定义该行为，与其替调用方选一个，不如判为非法。</li>
+     *   <li>{@code USE_BIG_DECIMAL_FOR_FLOATS} + {@code withExactBigDecimals}——
+     *       **小数一律走 BigDecimal，不走 double**。默认行为会把小数读成 double 再写回，
+     *       于是超出 double 精度的值会被改写：实测 {@code 998877665544332211.99} →
+     *       {@code 9.988776655443322E17}、{@code 1e400} → {@code "Infinity"}（还变成了字符串）、
+     *       {@code 1e-400} → {@code 0.0}。而报告里的动作是
+     *       {@code ARRAY_SAMPLED_LIMIT} / {@code NO_TRIMMABLE_STRUCTURE_LEFT} 之类，
+     *       **没有任何一条说"数值被改过"**。
+     *       BigDecimal 是精确十进制，`1e400` 与 `1e-400` 都能原样承载，
+     *       所以这两条修的是"值"而不是"字节"——对第二、三档（按设计就是有损的）来说，
+     *       值保真是该守的那条线。第一档另走纯文本扫描，连字节都不动（见 {@code minifyTextually}）。</li>
      * </ul>
      */
     private static final ObjectMapper MAPPER = new ObjectMapper()
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
-            .enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION);
+            .enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
+            .enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS)
+            .setNodeFactory(JsonNodeFactory.withExactBigDecimals(true));
 
     /** 单个字符串值超过此长度才考虑截断 */
     private static final int STRING_TRUNCATE_THRESHOLD = 512;
