@@ -48,6 +48,13 @@ jobs:
           assert s['violated'] == 0, "预算契约被违反 %d 次" % s['violated']
           assert s['compliance'] == 1.0, "遵守率 %.1f%%" % (s['compliance'] * 100)
           assert s['underfilled'] == 0, "有 %d 个用例几乎没把预算用上" % s['underfilled']
+          # README 那张「不同预算下的压缩后 token」表，逐格复算过。
+          # 它是本仓库对外引用最多的一组数字，而此前没有任何东西守着它——
+          # 上面的断言只查 violated/underfilled，**从不比对任何具体数字**，
+          # 所以表里的值漂了很久（8000 那格写 7,942，实测 7,920）而门禁一直绿。
+          mismatches = s.get('readmeMismatches')
+          assert mismatches is not None, "报告里没有 readmeMismatches 字段——这条检查没跑"
+          assert mismatches == [], "README 的预算表与实测对不上：%s" % mismatches
           PY
 
       # 保真评测：关键信息召回 + **保真证书**（输出里不许出现原文没有的内容）。

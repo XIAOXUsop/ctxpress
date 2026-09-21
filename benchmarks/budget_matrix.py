@@ -28,6 +28,14 @@ JAR = os.path.join(ROOT, "ctxpress-cli", "target", "ctxpress.jar")
 
 BUDGETS = [200, 500, 1000, 2000, 4000, 8000, 16000, 32000, 64000, 128000]
 
+# README 里那张「不同预算下的压缩后 token」表用的档位。
+#
+# 它与上面那十档**不重合**（矩阵是 200...128000），所以只能单独复算一遍。
+# 为什么值得单独做：那张表是本仓库对外引用最多的一组数字，而此前**没有任何东西守着它**
+# ——上面的门禁只查 violated / underfilled，从不比对任何具体数字，所以表里的值漂了
+# 很久没人发现（2026-09-22：8000 那格写 7,942，实测 7,920）。
+README_BUDGETS = [8000, 20000, 60000, 150000]
+
 CORPORA = [
     "app.log",
     "bracketed.log",
@@ -54,6 +62,45 @@ def run_case(path, budget):
         raise RuntimeError("无法解析报告行：%r" % line)
     kind, orig, comp = m.group(1), int(m.group(2)), int(m.group(3))
     return kind, orig, comp, line
+
+
+def parse_readme_budget_table():
+    """Read the budget table out of README.md -> {budget: compressed}."""
+    import io
+    path = os.path.join(ROOT, "README.md")
+    text = io.open(path, encoding="utf-8").read()
+    anchor = text.find("| 你给的预算 | 压缩后 | 变化 |")
+    if anchor < 0:
+        return None
+    rows = {}
+    for line in text[anchor:].splitlines()[2:]:
+        m = re.match(r"^\|\s*([\d,]+)\s*\|\s*([\d,]+)\s*\|", line)
+        if not m:
+            break
+        rows[int(m.group(1).replace(",", ""))] = int(m.group(2).replace(",", ""))
+    return rows
+
+
+def check_readme_table():
+    """Re-run app.log at the README's budgets and compare, cell by cell."""
+    claimed = parse_readme_budget_table()
+    if claimed is None:
+        # 找不到那张表就**明说**，不要静默跳过——"查不动"与"没问题"是两回事
+        return ["README budget table not found (anchor row missing) - nothing was checked"]
+    app_log = os.path.join(DATA, "app.log")
+    if not os.path.exists(app_log):
+        return ["benchmarks/data/app.log missing - run benchmarks/generate.py first"]
+
+    problems = []
+    for budget in README_BUDGETS:
+        if budget not in claimed:
+            problems.append("README table has no row for budget %d" % budget)
+            continue
+        _, _, compressed, _ = run_case(app_log, budget)
+        if claimed[budget] != compressed:
+            problems.append("budget %d: README says %d, actual %d"
+                            % (budget, claimed[budget], compressed))
+    return problems
 
 
 def main():
@@ -100,6 +147,9 @@ def main():
         },
         "rows": rows,
     }
+    readme_problems = check_readme_table()
+    report["summary"]["readmeMismatches"] = readme_problems
+
     out_path = os.path.join(ROOT, "benchmarks", "budget-matrix.json")
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=2)
@@ -113,6 +163,9 @@ def main():
     print("  VIOLATED         : %d" % len(violated))
     print("  underfilled(<50%%): %d" % len(underfilled))
     print("  COMPLIANCE       : %.1f%%" % (compliance * 100))
+    print("  README table     : %s" % ("OK" if not readme_problems else "MISMATCH (%d)" % len(readme_problems)))
+    for problem in readme_problems:
+        print("    ! %s" % problem)
 
     if violated:
         print("\nworst violations:")
