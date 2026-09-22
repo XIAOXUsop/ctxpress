@@ -78,6 +78,25 @@ jobs:
           grep -q "AML-9999" /tmp/gate/small.log || { echo "受保护内容被压掉了"; exit 1; }
           grep -q "Caused by" /tmp/gate/small.log || { echo "异常链被压掉了"; exit 1; }
 
+      # README 里的测试条数必须等于真实跑出来的条数。
+      #
+      # 实测（2026-09-22）：那句话原先写着 98 项（core 73 + …），而真实是 102
+      # （core 77）——本轮给 core 加了 4 条测试，README 没跟着改。
+      # 这类数字**没有东西守着就一定会漂**：本工作区里 letterpress 漂到过 263
+      # （实际 270）、mcp-sentinel 漂到过 127（实际 131）、desensitize 同一页上
+      # 两处互相矛盾（110 vs 107）。有门禁的那几处就没漂。
+      #
+      # **位置很要紧**：它读的是上面 "Build and test" 写下的 Surefire XML。
+      # 第一版我把它放进 `release-gate-selftest` job——那个 job 根本不跑
+      # `./mvnw`，也没有 JDK，产物一个都没有，那一步会**每次必红**。
+      # 检查放错 job 和没接线一样，都是"写了但守不住"。
+      #
+      # 读不到产物**就是失败**，不是跳过——否则把测试那步拿掉，这条会静默失效。
+      # 它的回归用例在 `scripts/test_check_readme_test_count.py`，
+      # 核心是把「这一块没量到」与「数字对不上」**分开报**——这两类的处置完全相反。
+      - name: README 测试条数对账
+        run: python3 scripts/check_readme_test_count.py
+
   release-gate-selftest:
     name: Release Gate Self-test
     runs-on: ubuntu-latest
