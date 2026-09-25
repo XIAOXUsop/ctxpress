@@ -505,7 +505,7 @@ headroom 用不了。
 ## 测试
 
 ```bash
-./mvnw test      # 102 项，全部离线（core 77 + tokenizer 10 + cli 15）
+./mvnw test      # 104 项，全部离线（core 78 + tokenizer 11 + cli 15）
 ```
 
 覆盖的四条不变量比功能本身更重要：
