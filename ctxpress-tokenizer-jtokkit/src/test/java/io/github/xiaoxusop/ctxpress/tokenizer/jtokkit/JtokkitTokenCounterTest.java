@@ -156,7 +156,7 @@ class JtokkitTokenCounterTest {
 
     @Test
     void reportNamesTheVocabularySoTheNumberCannotBeMisread() {
-        PressPolicy policy = PressPolicy.hardBudget(2000, new JtokkitTokenCounter(JtokkitTokenCounter.Vocabulary.O200K_BASE)).build();
+        PressPolicy policy = PressPolicy.strictBudget(2000, new JtokkitTokenCounter(JtokkitTokenCounter.Vocabulary.O200K_BASE)).build();
         String content = java.util.stream.IntStream.range(0, 400)
                 .mapToObj(i -> "2026-09-18T03:00:%02d INFO step=%d ok".formatted(i % 60, i))
                 .collect(java.util.stream.Collectors.joining("\n"));
@@ -167,5 +167,25 @@ class JtokkitTokenCounterTest {
         assertEquals("o200k_base", counter.name());
         assertTrue(counter.exact());
         assertTrue(result.report().summary().contains("真实词表口径"), result.report().summary());
+        assertTrue(result.report().strictBudgetSatisfied() || result.report().budgetUnsatisfiable());
+    }
+
+    @Test
+    void strictBudgetMatrixCoversChineseCodeLogsAndMixedContent() {
+        java.util.List<String> corpus = java.util.List.of(
+                "客户身份识别与交易监控记录。".repeat(300),
+                "public class RiskCheck { int score = 42; /* review */ }\n".repeat(300),
+                "2026-09-26T02:00:00 INFO tx=TXN123456 amount=1200.00 CNY\n".repeat(300),
+                "中文说明 with English API keys {\"risk_score\":42}\n".repeat(300));
+        for (String content : corpus) {
+            for (int budget : new int[]{128, 512, 2000}) {
+                PressResult result = ContextPress.with(PressPolicy.strictBudget(budget, counter).build())
+                        .press(content);
+                PressReport report = result.report();
+                assertEquals(counter.count(result.content()), report.compressedTokens());
+                assertEquals(Math.max(0, report.compressedTokens() - budget), report.overBudgetBy());
+                assertTrue(report.strictBudgetSatisfied() || report.budgetUnsatisfiable());
+            }
+        }
     }
 }

@@ -144,6 +144,18 @@ public final class PressPolicy {
         return builder().tokenCounter(counter).maxTokens(maxTokens);
     }
 
+    /**
+     * 使用真实词表施加严格预算。估算器即使加安全余量也不能证明模型 token 上界。
+     * 保留 {@link #hardBudget(int, TokenCounter)} 的现有行为以免改变旧调用方。
+     */
+    public static Builder strictBudget(int maxTokens, TokenCounter counter) {
+        Objects.requireNonNull(counter, "strictBudget 需要真实词表计数器");
+        if (!counter.exact()) {
+            throw new IllegalArgumentException("strictBudget 需要真实词表；" + counter.name() + " 是估算口径");
+        }
+        return builder().tokenCounter(counter).maxTokens(maxTokens);
+    }
+
     public static final class Builder {
 
         // 注意：不调用 tokenCounter(...) 时用的是启发式估算（偏乐观）。

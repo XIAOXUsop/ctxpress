@@ -244,13 +244,15 @@ LOG: 109398 -> 8909 tokens (-91.9%), 保护 60 段, 计数口径=o200k_base（�
 估算偏乐观，意味着"按估算卡住预算"的内容真实计费可能超。要在意这一点时有两种做法：
 
 ```java
-// ① 把预算当硬约束：计数器必须显式给出，省不掉
-PressPolicy policy = PressPolicy.hardBudget(8000, new JtokkitTokenCounter(Vocabulary.O200K_BASE)).build();
+// ① 要严格控制模型 token：必须使用真实词表
+PressPolicy policy = PressPolicy.strictBudget(8000, new JtokkitTokenCounter(Vocabulary.O200K_BASE)).build();
 
 // ② 继续用轻量的启发式，但按实测倍率垫高（倍数来自 benchmarks/ 的日志基准，别拍脑袋填）
 TokenCounter padded = TokenEstimator.withSafetyMargin(TokenEstimator.BENCHMARK_ESTIMATE_GAP);
 PressPolicy policy2 = PressPolicy.hardBudget(8000, padded).build();
 ```
+
+`hardBudget` 为兼容旧调用方式保留，允许显式传入估算器；这时 `report.budgetSatisfied()` 仅表示估算口径下满足预算。要把结果作为模型 token 上界，使用 `strictBudget` 并检查 `report.strictBudgetSatisfied()`；无法满足时查看 `overBudgetBy`。
 
 | 计数器 | 报告里的名字 | 口径 | 依赖 |
 |---|---|---|---|

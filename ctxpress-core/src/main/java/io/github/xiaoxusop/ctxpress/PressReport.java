@@ -59,6 +59,11 @@ public record PressReport(
         return overBudgetBy == 0;
     }
 
+    /** 仅当真实词表计数器确认未超预算时为 true；估算结果不能证明模型上界。 */
+    public boolean strictBudgetSatisfied() {
+        return counter.exact() && budgetSatisfied();
+    }
+
     /**
      * 预算是否无法满足。
      *

@@ -129,4 +129,13 @@ class TokenCounterDisclosureTest {
 
         assertTrue(failure.getMessage().contains("必须显式指定"), failure.getMessage());
     }
+
+    @Test
+    void estimatedCounterCannotClaimStrictBudget() {
+        TokenCounter estimate = TokenEstimator.defaultCounter();
+        assertThrows(IllegalArgumentException.class, () -> PressPolicy.strictBudget(8000, estimate));
+        PressReport report = ContextPress.with(PressPolicy.defaults()).press("短内容").report();
+        assertTrue(report.budgetSatisfied());
+        assertFalse(report.strictBudgetSatisfied(), "估算口径不能证明模型 token 上界");
+    }
 }
